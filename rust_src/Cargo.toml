@@ -1,0 +1,21 @@
+[package]
+name = "starship-ffi"
+version = "0.1.0"
+edition = "2024"
+description = "C FFI bindings for Starship prompt — in-process shell integration"
+license = "ISC"
+
+[lib]
+name = "starship_ffi"
+crate-type = ["cdylib"]
+
+[dependencies]
+starship = { path = "../starship", default-features = false, features = ["in-process"] }
+libc = "0.2"
+rayon = "1.12"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
