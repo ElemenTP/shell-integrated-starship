@@ -37,7 +37,7 @@ try {
 
 # Check version
 try {
-    $ver = [StarshipNative.PromptSession]::Version()
+    $ver = [StarshipNative.Session]::Version()
     Write-Host "PASS: version $ver"
 } catch {
     Write-Host "FAIL: could not get version: $_"
@@ -46,7 +46,7 @@ try {
 
 # Create session and render
 try {
-    $session = New-Object StarshipNative.PromptSession
+    $session = New-Object StarshipNative.Session
     Write-Host "PASS: session created"
 
     # Render main prompt
