@@ -107,18 +107,11 @@ export STARSHIP_SHELL="zsh"
 zmodload zsh/parameter  # Needed to access jobstates variable for STARSHIP_JOBS_COUNT
 
 # Defines a function `__starship_get_time` that sets the time since epoch in millis in STARSHIP_CAPTURED_TIME.
-if [[ $ZSH_VERSION == ([1-4]*) ]]; then
-    # ZSH <= 5; Does not have a built-in variable so we will rely on Starship's inbuilt time function.
-    __starship_get_time() {
-        STARSHIP_CAPTURED_TIME=$(::STARSHIP:: time)
-    }
-else
-    zmodload zsh/datetime
-    zmodload zsh/mathfunc
-    __starship_get_time() {
-        (( STARSHIP_CAPTURED_TIME = int(rint(EPOCHREALTIME * 1000)) ))
-    }
-fi
+zmodload zsh/datetime
+zmodload zsh/mathfunc
+__starship_get_time() {
+    (( STARSHIP_CAPTURED_TIME = int(rint(EPOCHREALTIME * 1000)) ))
+}
 
 # The two functions below follow the naming convention `prompt_<theme>_<hook>`
 # for compatibility with Zsh's prompt system.
