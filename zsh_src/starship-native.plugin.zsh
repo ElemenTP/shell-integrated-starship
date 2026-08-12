@@ -1,11 +1,24 @@
-# Starship Native — In-process prompt for zsh.
+# starship-native.plugin.zsh — in-process Starship prompt for zsh.
 #
-# This plugin mirrors the official starship/src/init/starship.zsh script,
-# replacing the $(starship prompt ...) command substitution with the
-# in-process starship_prompt builtin (loaded via zmodload).
+# A plugin-manager friendly loader, compatible with oh-my-zsh, zinit, antigen,
+# zplug, zgen, sheldon, ... — just point your plugin manager at this repository
+# and the *.plugin.zsh naming convention makes it pick this file up.
 #
-# Source this after installing starship_native.so:
-#   source ~/.local/lib/zsh/starship-native.plugin.zsh
+# Before this plugin can do anything you must have built & installed the
+# compiled module (see README):
+#
+#     cmake -B build -S .
+#     cmake --build build --config Release
+#     cmake --install build --config Release --prefix ~/.local
+#
+# Compiled module discovery order:
+#   1. $STARSHIP_NATIVE_DIR           — explicit override
+#   2. this script's own directory    — `cmake --install` layout (lib/zsh/)
+#   3. common install prefixes        — ~/.local/lib/zsh, /usr/local/lib/zsh, ...
+#
+# The plugin mirrors the official starship/src/init/starship.zsh script,
+# replacing `$(starship prompt ...)` with the in-process `starship_prompt`
+# builtin (loaded via zmodload).
 
 # Prevent double-loading
 if (( ${+_STARSHIP_NATIVE_LOADED} )); then
@@ -13,15 +26,76 @@ if (( ${+_STARSHIP_NATIVE_LOADED} )); then
 fi
 typeset -g _STARSHIP_NATIVE_LOADED=1
 
-# Locate the module directory (same directory as this script)
+# Locate this script's directory (works under any plugin manager).
 0="${${ZERO:-${0:#$ZSH_ARGZERO}}:-${(%):-%N}}"
 0="${${(M)0:#/*}:-$PWD/$0}"
-typeset -g STARSHIP_NATIVE_DIR="${0:h}"
+typeset -g _STARSHIP_NATIVE_SCRIPT_DIR="${0:h}"
+
+# ---- Compiled module discovery ---------------------------------------------
+# Platform-specific file names.
+case "${OSTYPE:-}" in
+  darwin*)
+    _starship_native_mods=(starship_native.dylib)
+    _starship_native_ffis=(libstarship_ffi.dylib)
+    ;;
+  *)
+    _starship_native_mods=(starship_native.so)
+    _starship_native_ffis=(libstarship_ffi.so)
+    ;;
+esac
+
+typeset -ga _starship_native_dirs
+if [[ -n "${STARSHIP_NATIVE_DIR:-}" ]]; then
+  _starship_native_dirs+=("$STARSHIP_NATIVE_DIR")
+fi
+_starship_native_dirs+=(
+  "$_STARSHIP_NATIVE_SCRIPT_DIR"
+  "${XDG_DATA_HOME:-$HOME/.local/share}/zsh"
+  "$HOME/.local/lib/zsh"
+  "/usr/local/lib/zsh"
+  "/usr/lib/zsh"
+  "/opt/starship-native/lib/zsh"
+)
+
+# STARSHIP_NATIVE_DIR is also the resolved module directory (exported so users
+# can see where the module was loaded from); STARSHIP_NATIVE_FFI is the ffi lib
+# when it is colocated with the module (optional — the module RPATH covers it).
+typeset -g STARSHIP_NATIVE_DIR=""
+typeset -g STARSHIP_NATIVE_FFI=""
+
+typeset _dir _mod _ffi _found=0
+for _dir in "${_starship_native_dirs[@]}"; do
+  [[ -d "$_dir" ]] || continue
+  for _mod in "${_starship_native_mods[@]}"; do
+    if [[ -f "$_dir/$_mod" ]]; then
+      STARSHIP_NATIVE_DIR="$_dir"
+      _found=1
+      for _ffi in "${_starship_native_ffis[@]}"; do
+        if [[ -f "$_dir/$_ffi" ]]; then
+          STARSHIP_NATIVE_FFI="$_dir/$_ffi"
+          break
+        fi
+      done
+      break
+    fi
+  done
+  (( _found )) && break
+done
+
+if [[ -z "$STARSHIP_NATIVE_DIR" ]]; then
+  print -u2 "starship-native: compiled module (starship_native) not found."
+  print -u2 "  Build it first:"
+  print -u2 "    cmake -B build -S . && cmake --build build --config Release"
+  print -u2 "    cmake --install build --config Release --prefix \$HOME/.local"
+  print -u2 "  Or point STARSHIP_NATIVE_DIR at the installed lib/zsh directory."
+  unset _starship_native_dirs _starship_native_mods _starship_native_ffis
+  return 1
+fi
 
 # ---- Load the native module ----
 module_path=("$STARSHIP_NATIVE_DIR" $module_path)
 zmodload starship_native || {
-  echo "starship-native: failed to load starship_native.so" >&2
+  print -u2 "starship-native: failed to load starship_native from $STARSHIP_NATIVE_DIR"
   return 1
 }
 

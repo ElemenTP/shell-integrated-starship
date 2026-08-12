@@ -42,6 +42,7 @@ typedef struct {
 
 /* Session lifecycle. */
 ssp_session_t *ssp_session_create(void);
+void ssp_session_shutdown(ssp_session_t *s);
 void ssp_session_destroy(ssp_session_t *s);
 
 /* Render a prompt. Returns 0 on success, <0 on error.
@@ -55,8 +56,8 @@ void ssp_free(char *ptr);
 /* Return the library version string (static, no free needed). */
 const char *ssp_version(void);
 
-/* Return the last error message (thread-local, valid until next call). */
-const char *ssp_last_error(void);
+/* Return the last error message (static mutex guarded, copy out, should be freed with ssp_free). */
+void ssp_last_error(char **out);
 
 /* Retrieve session statistics. Returns 0 on success. */
 int ssp_session_stats(const ssp_session_t *s, ssp_stats_t *out);

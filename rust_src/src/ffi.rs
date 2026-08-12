@@ -5,28 +5,36 @@
 
 use libc::c_char;
 use starship::context::{Properties, Target};
-use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
+use std::ptr;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
+//
+// NOTE: deliberately NOT thread_local!. A thread_local! would register a TLS
+// destructor on the HOST thread (zsh/pwsh main thread) the first time it is
+// touched. After dlclose() unmaps this dylib, that destructor pointer dangles —
+// glibc skips destructors of unloaded DSOs, but macOS and Windows do not,
+// causing a potential SIGSEGV at host-thread exit.
+//
+// A global Mutex has no per-thread state and is safe to unload. FFI calls
+// are serialized by the shell's single thread anyway, so contention is nil.
 
-thread_local! {
-    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
-}
+static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
 
 fn set_error(msg: &str) {
-    LAST_ERROR.with(|e| {
-        *e.borrow_mut() = CString::new(msg).ok();
-    });
+    if let Ok(mut e) = LAST_ERROR.lock() {
+        *e = CString::new(msg).ok();
+    }
 }
 
 fn clear_error() {
-    LAST_ERROR.with(|e| {
-        *e.borrow_mut() = None;
-    });
+    if let Ok(mut e) = LAST_ERROR.lock() {
+        *e = None;
+    }
 }
 
 /// FFI panic guard: wraps a closure, catching any panic and converting it to
@@ -174,6 +182,18 @@ impl ssp_render_input {
 /// Opaque session handle passed to C code.
 pub struct SessionHandle {
     session: starship::session::Session,
+    creator_pid: u32,
+}
+
+/// Check for fork: zsh forks for $(...), &, and pipelines, and the child
+/// process inherits the tokio/rayon runtime in a corrupted state.
+macro_rules! guard_fork {
+    ($handle:expr, $error_val:expr) => {
+        if { &*$handle }.creator_pid != std::process::id() {
+            set_error("refusing call in forked child process");
+            return $error_val;
+        }
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -190,17 +210,33 @@ pub struct SessionHandle {
 pub extern "C" fn ssp_session_create() -> *mut SessionHandle {
     ffi_guard!(
         {
-            // Initialize the rayon global thread pool (mirrors what `starship` main does).
-            let _ = rayon::ThreadPoolBuilder::new()
-                .num_threads(starship::num_rayon_threads())
-                .build_global();
+            // Session creates its own scoped rayon pool (no global pool).
+            // The pool is cleanly terminated when the session is destroyed.
             let handle = Box::new(SessionHandle {
                 session: starship::session::Session::new(),
+                creator_pid: std::process::id(),
             });
             Box::into_raw(handle)
         },
         std::ptr::null_mut()
     )
+}
+
+/// Shut down the session's thread pool and wait for workers to exit.
+/// Must be called before the shared library is unloaded.
+#[unsafe(no_mangle)]
+pub extern "C" fn ssp_session_shutdown(handle: *mut SessionHandle) {
+    if handle.is_null() {
+        return;
+    }
+    ffi_guard!(
+        {
+            let handle = unsafe { &*handle };
+            guard_fork!(handle, ());
+            handle.session.shutdown();
+        },
+        ()
+    );
 }
 
 /// Destroy a session previously created with `ssp_session_create`.
@@ -214,6 +250,7 @@ pub extern "C" fn ssp_session_destroy(handle: *mut SessionHandle) {
     ffi_guard!(
         {
             unsafe {
+                guard_fork!(handle, ());
                 let _ = Box::from_raw(handle);
             }
         },
@@ -239,6 +276,7 @@ pub extern "C" fn ssp_session_render(
                 return -1;
             }
             let handle = unsafe { &*handle };
+            guard_fork!(handle, -1);
             let input = unsafe { &*input };
 
             let properties = input.to_properties(input.target());
@@ -291,17 +329,18 @@ pub extern "C" fn ssp_version() -> *const c_char {
     VERSION.as_ptr()
 }
 
-/// Return the last error message from the current thread.
+/// Return the last error message.
 ///
-/// The returned pointer is valid until the next FFI call from the same thread.
+/// The caller must free `*out` with `ssp_free()`.
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_last_error() -> *const c_char {
-    LAST_ERROR.with(|e| {
-        e.borrow()
-            .as_ref()
-            .map(|c| c.as_ptr())
-            .unwrap_or(std::ptr::null())
-    })
+pub extern "C" fn ssp_last_error(out: *mut *mut c_char) {
+    let c_string = LAST_ERROR.lock().ok().and_then(|e| e.clone());
+    unsafe {
+        match c_string {
+            Some(c_string) => *out = c_string.into_raw(),
+            None => *out = ptr::null_mut(),
+        }
+    }
 }
 
 /// Retrieve cache performance statistics for a session.
@@ -565,7 +604,8 @@ mod tests {
     #[test]
     fn test_error_recovery() {
         // ssp_last_error should return null initially.
-        let err = ssp_last_error();
+        let mut err: *mut c_char = ptr::null_mut();
+        ssp_last_error(&mut err);
         assert!(err.is_null(), "no error should be set initially");
 
         // Render with null input should fail but not crash.
@@ -574,7 +614,8 @@ mod tests {
         assert!(rc < 0, "null everything should return error");
 
         // Should have an error message now.
-        let err = ssp_last_error();
+        ssp_last_error(&mut err);
         assert!(!err.is_null(), "error should be set after failure");
+        ssp_free(err);
     }
 }

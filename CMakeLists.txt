@@ -219,13 +219,16 @@ if(BUILD_ZSH_MODULE)
 
     if(UNIX)
         install(TARGETS ${ZSH_MODULE_NAME}
-            LIBRARY DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/zsh"
+            LIBRARY DESTINATION "lib/zsh"
         )
         install(FILES "${FFI_SHARED}"
-            DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/zsh"
+            DESTINATION "lib/zsh"
         )
+        # The canonical plugin file lives at the repo root so zsh plugin
+        # managers (oh-my-zsh, zinit, antigen, zplug, ...) can pick it up;
+        # the same file is installed here for direct `source` usage.
         install(FILES "${CMAKE_SOURCE_DIR}/zsh_src/starship-native.plugin.zsh"
-            DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/zsh"
+            DESTINATION "lib/zsh"
         )
     endif()
 endif()
@@ -245,27 +248,19 @@ if(BUILD_PWSH_MODULE)
         USES_TERMINAL
     )
 
-    if(WIN32)
-        add_custom_command(TARGET starship_pwsh POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_SOURCE_DIR}/pwsh_src/starship-native.psd1"
-                "${PWSH_OUT_DIR}/starship-native.psd1"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_SOURCE_DIR}/pwsh_src/starship-native.ps1"
-                "${PWSH_OUT_DIR}/starship-native.ps1"
-            COMMENT "Copying pwsh module manifests"
-        )
-    endif()
-
     install(DIRECTORY "${PWSH_OUT_DIR}/"
-        DESTINATION "${CMAKE_INSTALL_PREFIX}/share/pwsh/modules/StarshipNative"
+        DESTINATION "share/pwsh/modules/StarshipNative"
         FILES_MATCHING
         PATTERN "*.dll"
         PATTERN "*.psd1"
-        PATTERN "*.ps1"
+        PATTERN "*.psm1"
         PATTERN "*.so"
         PATTERN "*.dylib"
     )
+    # The manifest (.psd1) and script module (.psm1) live in pwsh_src/ and are
+    # copied into the dotnet output dir by the csproj (CopyToOutputDirectory),
+    # so the install rule above picks them up automatically. No extra install
+    # of pwsh_src files is needed.
 endif()
 
 # ── Tests ──────────────────────────────────────────────────────────────────

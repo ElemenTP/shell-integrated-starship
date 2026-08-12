@@ -29,12 +29,14 @@
 #define MODNAME "starship_native"
 
 /* Forward declarations */
-static int bin_ssp_prompt(char *nam, char **args, Options ops, int func);
-static int bin_ssp_stats(char *nam, char **args, Options ops, int func);
+static int bin_ssp_prompt(char *name, char **argv, Options ops, int func);
+static int bin_ssp_version(char *name, char **argv, Options ops, int func);
+static int bin_ssp_stats(char *name, char **argv, Options ops, int func);
 
 /* Builtin table */
 static struct builtin bintab[] = {
     BUILTIN("starship_prompt", 0, bin_ssp_prompt, 0, 0, 0, NULL, NULL),
+    BUILTIN("starship_version", 0, bin_ssp_version, 0, -1, 0, NULL, NULL),
     BUILTIN("starship_stats", 0, bin_ssp_stats, 0, -1, 0, NULL, NULL),
 };
 
@@ -180,6 +182,38 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
 }
 
 /* ------------------------------------------------------------------ */
+/* Builtin: starship_version                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Show the verion of starship-native, also expose as zsh parameters:
+ * STARSHIP_VERSION
+ *
+ * Usage:
+ *   starship_version        — set params + print version
+ *   starship_version -q     — quiet (only set params, no output)
+ */
+static int bin_ssp_version(UNUSED(char *name), char **argv, UNUSED(Options ops),
+                           UNUSED(int func)) {
+  int quiet = 0;
+  while (*argv) {
+    if (strcmp(*argv, "-q") == 0)
+      quiet = 1;
+    argv++;
+  }
+
+  const char *version = ssp_version();
+  version = version ? version : "unknown";
+  setsparam((char *)"STARSHIP_VERSION", ztrdup(version));
+
+  if (!quiet) {
+    printf("%s", version);
+  }
+
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Builtin: starship_stats                                            */
 /* ------------------------------------------------------------------ */
 
@@ -298,9 +332,13 @@ int boot_(UNUSED(Module m)) {
   /* Create the persistent FFI session */
   g_session = ssp_session_create();
   if (!g_session) {
-    const char *err = ssp_last_error();
+    char *err = NULL;
+    ssp_last_error(&err);
     zwarnnam(MODNAME, "starship_native: failed to create session: %s",
              err ? err : "unknown error");
+    if (err) {
+      ssp_free(err);
+    }
     return 1;
   }
   return 0;
@@ -308,8 +346,9 @@ int boot_(UNUSED(Module m)) {
 
 /**/
 int cleanup_(Module m) {
-  /* Free the session */
+  /* Shut down the thread pool before freeing the session */
   if (g_session) {
+    ssp_session_shutdown(g_session);
     ssp_session_destroy(g_session);
     g_session = NULL;
   }

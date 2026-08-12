@@ -12,7 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 starship = { path = "../starship", default-features = false, features = ["in-process"] }
 libc = "0.2"
-rayon = "1.12"
 
 [profile.release]
 opt-level = 3

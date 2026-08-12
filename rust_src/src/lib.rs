@@ -7,6 +7,6 @@
 //!
 //! All FFI functions use `catch_unwind` wrappers to prevent Rust panics from
 //! unwinding across the FFI boundary. Errors are reported via return codes and
-//! a thread-local error string accessible via `ssp_last_error()`.
+//! a global mutex guarded error string accessible via `ssp_last_error()`.
 
 pub mod ffi;

@@ -7,7 +7,7 @@ namespace StarshipNative;
 /// Safe managed wrapper around the starship-ffi native session.
 ///
 /// Usage:
-///   var session = new PromptSession();
+///   var session = new Session();
 ///   string prompt = session.Render(
 ///       status: "0",
 ///       duration: null,
@@ -18,7 +18,7 @@ namespace StarshipNative;
 ///   );
 ///   session.Dispose();
 /// </summary>
-public sealed class PromptSession : IDisposable
+public sealed class Session : IDisposable
 {
     private IntPtr _handle;
     private bool _disposed;
@@ -26,7 +26,7 @@ public sealed class PromptSession : IDisposable
     /// <summary>
     /// Create a new prompt rendering session.
     /// </summary>
-    public PromptSession()
+    public Session()
     {
         _handle = NativeMethods.SessionCreate();
         if (_handle == IntPtr.Zero)
@@ -117,10 +117,12 @@ public sealed class PromptSession : IDisposable
     /// </summary>
     public static string? LastError()
     {
-        IntPtr ptr = NativeMethods.LastError();
+        NativeMethods.LastError(out IntPtr ptr);
         if (ptr == IntPtr.Zero)
             return null;
-        return Marshal.PtrToStringUTF8(ptr);
+        string? ret = Marshal.PtrToStringUTF8(ptr);
+        NativeMethods.Free(ptr);
+        return ret;
     }
 
     /// <summary>
@@ -150,6 +152,7 @@ public sealed class PromptSession : IDisposable
     {
         if (!_disposed && _handle != IntPtr.Zero)
         {
+            NativeMethods.SessionShutdown(_handle);
             NativeMethods.SessionDestroy(_handle);
             _handle = IntPtr.Zero;
         }

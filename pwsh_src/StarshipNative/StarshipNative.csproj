@@ -10,4 +10,14 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <!-- Ship the module manifest + script module next to the binary so the
+       dotnet output directory is a complete, importable module (also used by
+       the CMake install rule and by Windows packaging). -->
+  <ItemGroup>
+    <None Include="..\starship-native.psd1" Link="starship-native.psd1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\StarshipNative.psm1" Link="StarshipNative.psm1"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
