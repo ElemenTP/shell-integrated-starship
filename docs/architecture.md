@@ -153,7 +153,7 @@ shell-integrated-starship/
 │   │   ├── NativeMethods.cs    # P/Invoke 声明 + 原生库解析器
 │   │   ├── Session.cs          # 托管封装
 │   │   └── Environment.cs      # 跨平台环境变量
-│   ├── StarshipNative.psm1    # 模块主体（prompt 逻辑）
+│   ├── starship-native.psm1    # 模块主体（prompt 逻辑）
 │   ├── starship-native.psd1   # 模块清单
 ├── tests/
 │   ├── ffi_smoke.c             # C FFI 冒烟测试

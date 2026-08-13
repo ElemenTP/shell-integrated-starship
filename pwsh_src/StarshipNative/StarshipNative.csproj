@@ -16,7 +16,7 @@
   <ItemGroup>
     <None Include="..\starship-native.psd1" Link="starship-native.psd1"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\StarshipNative.psm1" Link="StarshipNative.psm1"
+    <None Include="..\starship-native.psm1" Link="starship-native.psm1"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

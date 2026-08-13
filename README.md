@@ -20,7 +20,7 @@ Native 模式（进程内渲染）:
 | Shell                | 平台                  | 加载方式                         |
 | -------------------- | --------------------- | -------------------------------- |
 | zsh                  | Linux, macOS          | `zmodload starship_native`     |
-| pwsh (PowerShell 7+) | Windows, Linux, macOS | `Import-Module StarshipNative` |
+| pwsh (PowerShell 7+) | Windows, Linux, macOS | `Import-Module starship-native` |
 
 ## 编译
 
@@ -194,17 +194,17 @@ starship_native session stats (150 renders):
 
 模块为「脚本模块 + 二进制模块」混合结构：
 
-- `StarshipNative.psm1` — 模块主体（prompt 逻辑、原生库定位、辅助命令）
-- `StarshipNative.dll` — C# P/Invoke 封装（通过清单的 `NestedModules` 加载）
+- `starship-native.psm1` — 模块主体（prompt 逻辑、原生库定位、辅助命令）
 - `starship-native.psd1` — 模块清单（`RootModule` 指向 `.psm1`）
+- `StarshipNative.dll` — C# P/Invoke 封装（通过清单的 `NestedModules` 加载）
 
 ```powershell
 # 方式一：从安装目录导入
-Import-Module /path/to/prefix/share/pwsh/modules/StarshipNative
+Import-Module /path/to/prefix/share/pwsh/modules/starship-native
 
 # 方式二：安装到 PSModulePath 后按名称导入（推荐）
 $env:PSModulePath += ":$HOME/.local/share/powershell/Modules"
-Import-Module StarshipNative
+Import-Module starship-native
 
 # prompt 函数会自动替换；卸载模块时自动恢复原 prompt
 
@@ -304,7 +304,7 @@ shell-integrated-starship/
 │   │   ├── NativeMethods.cs    # P/Invoke 声明 + 原生库解析器
 │   │   ├── Session.cs          # 托管封装
 │   │   └── Environment.cs      # 跨平台环境变量
-│   ├── StarshipNative.psm1    # 模块主体（prompt 逻辑）
+│   ├── starship-native.psm1    # 模块主体（prompt 逻辑）
 │   ├── starship-native.psd1   # 模块清单
 ├── tests/
 │   ├── ffi_smoke.c             # C FFI 冒烟测试

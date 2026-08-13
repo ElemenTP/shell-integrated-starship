@@ -1,11 +1,11 @@
 @{
-    # StarshipNative module manifest.
+    # starship-native module manifest.
     #
     # Hybrid script + binary module: the .psm1 contains the prompt logic and is
     # the RootModule; the C# assembly (StarshipNative.dll) is loaded as a
     # NestedModule so its types are available to the .psm1 at import time.
 
-    RootModule           = 'StarshipNative.psm1'
+    RootModule           = 'starship-native.psm1'
     ModuleVersion        = '0.1.0'
     GUID                 = 'f2dbc61d-129c-43b4-84ed-6d6f8f0ab90e'
 

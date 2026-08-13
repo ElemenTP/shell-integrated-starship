@@ -249,7 +249,7 @@ if(BUILD_PWSH_MODULE)
     )
 
     install(DIRECTORY "${PWSH_OUT_DIR}/"
-        DESTINATION "share/pwsh/modules/StarshipNative"
+        DESTINATION "share/pwsh/modules/starship-native"
         FILES_MATCHING
         PATTERN "*.dll"
         PATTERN "*.psd1"

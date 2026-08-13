@@ -1,7 +1,7 @@
 #Requires -Version 7.2
 <#
 .SYNOPSIS
-    StarshipNative — in-process Starship prompt for PowerShell (pwsh 7+).
+    starship-native — in-process Starship prompt for PowerShell (pwsh 7+).
 
 .DESCRIPTION
     This module mirrors the official starship/src/init/starship.ps1 script,
@@ -15,7 +15,7 @@
     from another location, set the STARSHIP_FFI_PATH environment variable.
 
 .EXAMPLE
-    Import-Module StarshipNative
+    Import-Module starship-native
     Get-StarshipNativeVersion
 #>
 
@@ -215,7 +215,7 @@ function global:prompt {
         # back to a plain prompt so the shell stays usable.
         if (-not $script:__NativeWarned) {
             $script:__NativeWarned = $true
-            Write-Warning "StarshipNative: prompt render failed, falling back to default. $_"
+            Write-Warning "starship-native: prompt render failed, falling back to default. $_"
         }
         $promptText = "PS $($executionContext.SessionState.Path.CurrentLocation)> "
     }
