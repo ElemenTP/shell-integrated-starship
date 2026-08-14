@@ -32,14 +32,15 @@ typeset -g _STARSHIP_NATIVE_LOADED=1
 typeset -g _STARSHIP_NATIVE_SCRIPT_DIR="${0:h}"
 
 # ---- Compiled module discovery ---------------------------------------------
-# Platform-specific file names.
+# zsh hardcodes the loadable-module suffix to ".so" via its DL_EXT macro on
+# EVERY platform, including macOS (see zsh's configure.ac: DL_EXT="${DL_EXT=so}").
+_starship_native_mods=(starship_native.so)
+
 case "${OSTYPE:-}" in
   darwin*)
-    _starship_native_mods=(starship_native.dylib)
     _starship_native_ffis=(libstarship_ffi.dylib)
     ;;
   *)
-    _starship_native_mods=(starship_native.so)
     _starship_native_ffis=(libstarship_ffi.so)
     ;;
 esac
@@ -50,11 +51,11 @@ if [[ -n "${STARSHIP_NATIVE_DIR:-}" ]]; then
 fi
 _starship_native_dirs+=(
   "$_STARSHIP_NATIVE_SCRIPT_DIR"
-  "${XDG_DATA_HOME:-$HOME/.local/share}/zsh"
-  "$HOME/.local/lib/zsh"
-  "/usr/local/lib/zsh"
-  "/usr/lib/zsh"
-  "/opt/starship-native/lib/zsh"
+  "${XDG_DATA_HOME:-$HOME/.local/share}/zsh/starship-native"
+  "$HOME/.local/lib/zsh/starship-native"
+  "/usr/local/lib/zsh/starship-native"
+  "/usr/lib/zsh/starship-native"
+  "/opt/starship-native/lib/zsh/starship-native"
 )
 
 # STARSHIP_NATIVE_DIR is also the resolved module directory (exported so users

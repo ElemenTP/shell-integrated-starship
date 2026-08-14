@@ -137,7 +137,8 @@ set(RUST_SRC_DIR "${CMAKE_SOURCE_DIR}/rust_src")
 set(CARGO_RELEASE_FLAG "$<IF:$<CONFIG:Release>,--release,>")
 set(CARGO_PROFILE_DIR "$<IF:$<CONFIG:Release>,release,debug>")
 
-set(FFI_SHARED  "${RUST_SRC_DIR}/target/${CARGO_PROFILE_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}starship_ffi${CMAKE_SHARED_LIBRARY_SUFFIX}")
+set(FFI_NAME "${CMAKE_SHARED_LIBRARY_PREFIX}starship_ffi${CMAKE_SHARED_LIBRARY_SUFFIX}")
+set(FFI_SHARED "${RUST_SRC_DIR}/target/${CARGO_PROFILE_DIR}/${FFI_NAME}")
 
 # Build starship-ffi via a real OUTPUT rule. A plain add_custom_target has no
 # up-to-date check and would re-run `cargo build` on EVERY build; by declaring
@@ -155,9 +156,24 @@ if(EXISTS "${STARSHIP_SRC_DIR}/src")
         "${STARSHIP_SRC_DIR}/build.rs")
 endif()
 
+# On macOS, rustc's default LC_ID_DYLIB is the ABSOLUTE cargo target path,
+# which gets baked into any consumer (starship_native.so) as its LC_LOAD_DYLIB,
+# leaking the build machine's path into the artifact. Rewrite it to a
+# relocatable @rpath reference right after `cargo build` so the zsh module
+# resolves the ffi library through its own LC_RPATH (set to @loader_path at
+# install time) instead of an absolute path.
+if(APPLE)
+    set(STARSHIP_FFI_FIX
+        COMMAND install_name_tool -id
+            "@rpath/${FFI_NAME}" "${FFI_SHARED}")
+else()
+    set(STARSHIP_FFI_FIX "")
+endif()
+
 add_custom_command(
     OUTPUT "${FFI_SHARED}"
     COMMAND ${CARGO} build ${CARGO_RELEASE_FLAG}
+    ${STARSHIP_FFI_FIX}
     WORKING_DIRECTORY "${RUST_SRC_DIR}"
     DEPENDS ${STARSHIP_FFI_DEPENDS}
     COMMENT "Building starship-ffi (Rust crate, $<CONFIG>)..."
@@ -205,30 +221,53 @@ if(BUILD_ZSH_MODULE)
         )
     endif()
 
+    # zsh hardcodes its loadable-module suffix to ".so" on EVERY platform
+    # (DL_EXT=so in zsh's configure.ac), including macOS. Even though this
+    # target is a Mach-O dylib on macOS, it MUST be named starship_native.so
+    # or `zmodload` will refuse to find it.
     set_target_properties(${ZSH_MODULE_NAME} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/zsh_src/build"
-        INSTALL_RPATH "$ORIGIN"
-        BUILD_RPATH "${RUST_SRC_DIR}/target/release"
         PREFIX ""
+        SUFFIX ".so"
+        BUILD_RPATH "${RUST_SRC_DIR}/target/$<IF:$<CONFIG:Release>,release,debug>"
     )
+    if(APPLE)
+        # macOS has no $ORIGIN. @loader_path makes the installed module resolve
+        # libstarship_ffi.dylib in its own directory (the ffi dylib is
+        # installed alongside it under lib/zsh/starship-native).
+        set_target_properties(${ZSH_MODULE_NAME} PROPERTIES
+            INSTALL_RPATH "@loader_path"
+        )
+    else()
+        set_target_properties(${ZSH_MODULE_NAME} PROPERTIES
+            INSTALL_RPATH "$ORIGIN"
+        )
+    endif()
 
-    add_custom_command(TARGET ${ZSH_MODULE_NAME} POST_BUILD
-        COMMAND ${CMAKE_STRIP} "$<TARGET_FILE:${ZSH_MODULE_NAME}>"
-        COMMAND_EXPAND_LISTS
-    )
+    if(APPLE)
+        add_custom_command(TARGET ${ZSH_MODULE_NAME} POST_BUILD
+            COMMAND ${CMAKE_STRIP} -u "$<TARGET_FILE:${ZSH_MODULE_NAME}>"
+            COMMAND_EXPAND_LISTS
+        )
+    else()
+        add_custom_command(TARGET ${ZSH_MODULE_NAME} POST_BUILD
+            COMMAND ${CMAKE_STRIP} "$<TARGET_FILE:${ZSH_MODULE_NAME}>"
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
 
     if(UNIX)
         install(TARGETS ${ZSH_MODULE_NAME}
-            LIBRARY DESTINATION "lib/zsh"
+            LIBRARY DESTINATION "lib/zsh/starship-native"
         )
         install(FILES "${FFI_SHARED}"
-            DESTINATION "lib/zsh"
+            DESTINATION "lib/zsh/starship-native"
         )
         # The canonical plugin file lives at the repo root so zsh plugin
         # managers (oh-my-zsh, zinit, antigen, zplug, ...) can pick it up;
         # the same file is installed here for direct `source` usage.
         install(FILES "${CMAKE_SOURCE_DIR}/zsh_src/starship-native.plugin.zsh"
-            DESTINATION "lib/zsh"
+            DESTINATION "lib/zsh/starship-native"
         )
     endif()
 endif()
