@@ -324,9 +324,10 @@ pub extern "C" fn ssp_free(ptr: *mut c_char) {
 /// The returned pointer is valid for the lifetime of the process.
 #[unsafe(no_mangle)]
 pub extern "C" fn ssp_version() -> *const c_char {
-    static VERSION: std::sync::LazyLock<CString> =
-        std::sync::LazyLock::new(|| CString::new(env!("CARGO_PKG_VERSION")).unwrap());
-    VERSION.as_ptr()
+    // A string literal has static storage duration and the trailing NUL is
+    // included in the literal itself, so no LazyLock/allocation is needed.
+    static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
+    VERSION.as_ptr().cast()
 }
 
 /// Return the last error message.
@@ -334,12 +335,16 @@ pub extern "C" fn ssp_version() -> *const c_char {
 /// The caller must free `*out` with `ssp_free()`.
 #[unsafe(no_mangle)]
 pub extern "C" fn ssp_last_error(out: *mut *mut c_char) {
+    if out.is_null() {
+        return;
+    }
     let c_string = LAST_ERROR.lock().ok().and_then(|e| e.clone());
+    // SAFETY: `out` points to a writable `char *` slot.
     unsafe {
-        match c_string {
-            Some(c_string) => *out = c_string.into_raw(),
-            None => *out = ptr::null_mut(),
-        }
+        *out = match c_string {
+            Some(c_string) => c_string.into_raw(),
+            None => ptr::null_mut(),
+        };
     }
 }
 
