@@ -27,6 +27,9 @@
 /* ------------------------------------------------------------------ */
 
 #define MODNAME "starship_native"
+#define BUILTIN_STARSHIP_PROMPT "starship_prompt"
+#define BUILTIN_STARSHIP_VERSION "starship_version"
+#define BUILTIN_STARSHIP_STATS "starship_stats"
 
 /* Forward declarations */
 static int bin_ssp_prompt(char *name, char **argv, Options ops, int func);
@@ -35,9 +38,9 @@ static int bin_ssp_stats(char *name, char **argv, Options ops, int func);
 
 /* Builtin table */
 static struct builtin bintab[] = {
-    BUILTIN("starship_prompt", 0, bin_ssp_prompt, 0, 0, 0, NULL, NULL),
-    BUILTIN("starship_version", 0, bin_ssp_version, 0, -1, 0, NULL, NULL),
-    BUILTIN("starship_stats", 0, bin_ssp_stats, 0, -1, 0, NULL, NULL),
+    BUILTIN(BUILTIN_STARSHIP_PROMPT, 0, bin_ssp_prompt, 0, 0, 0, NULL, NULL),
+    BUILTIN(BUILTIN_STARSHIP_VERSION, 0, bin_ssp_version, 0, -1, 0, NULL, NULL),
+    BUILTIN(BUILTIN_STARSHIP_STATS, 0, bin_ssp_stats, 0, -1, 0, NULL, NULL),
 };
 
 /* Features table — only builtins, no conditions/math/params */
@@ -96,6 +99,15 @@ static void set_str_param(const char *name, char *val) {
   setsparam((char *)name, metafy((char *)val, strlen(val), META_DUP));
 }
 
+/* Report an FFI failure using the Rust-side last-error string. */
+static void report_ffi_error(const char *operation) {
+  char *err = NULL;
+  ssp_last_error(&err);
+  zwarnnam(MODNAME, "%s: %s", operation, err ? err : "unknown error");
+  if (err)
+    ssp_free(err);
+}
+
 /* ------------------------------------------------------------------ */
 /* Builtin: starship_prompt                                           */
 /* ------------------------------------------------------------------ */
@@ -121,8 +133,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
                           UNUSED(Options ops), UNUSED(int func)) {
 
   if (!g_session) {
-    zwarnnam(MODNAME, "starship_native: session not initialized; "
-                      "module may not have booted correctly");
+    zwarnnam(MODNAME, "%s: session not initialized", BUILTIN_STARSHIP_PROMPT);
     return 1;
   }
 
@@ -156,27 +167,28 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
   input.shlvl = (shlvl_val > 0) ? (long long)shlvl_val : -1;
 
   /* --- Render main prompt --- */
-  char *out_main = NULL, *out_right = NULL, *out_cont = NULL;
+  static const char *param_names[] = {
+      "STARSHIP_PROMPT",
+      "STARSHIP_RPROMPT",
+      "STARSHIP_PROMPT2",
+  };
 
-  input.target = 0; /* Main */
-  if (ssp_session_render(g_session, &input, &out_main) == 0 && out_main) {
-    set_str_param("STARSHIP_PROMPT", out_main);
+  /* Prompt target: 0 = Main, 1 = Right, 2 = Continuation */
+  for (int i = 0; i < 3; i++) {
+    char *out = NULL;
+    int ret = 0;
+
+    input.target = i;
+    ret = ssp_session_render(g_session, &input, &out);
+    if (ret == 0) {
+      if (out) {
+        set_str_param(param_names[i], out);
+        ssp_free(out);
+      }
+    } else {
+      report_ffi_error(BUILTIN_STARSHIP_PROMPT);
+    }
   }
-
-  input.target = 1; /* Right */
-  if (ssp_session_render(g_session, &input, &out_right) == 0 && out_right) {
-    set_str_param("STARSHIP_RPROMPT", out_right);
-  }
-
-  input.target = 2; /* Continuation */
-  if (ssp_session_render(g_session, &input, &out_cont) == 0 && out_cont) {
-    set_str_param("STARSHIP_PROMPT2", out_cont);
-  }
-
-  /* --- Clean up --- */
-  ssp_free(out_main);
-  ssp_free(out_right);
-  ssp_free(out_cont);
 
   return 0;
 }
@@ -238,14 +250,14 @@ static int bin_ssp_stats(UNUSED(char *name), char **argv, UNUSED(Options ops),
   }
 
   if (!g_session) {
-    zwarnnam(MODNAME, "starship_native: session not initialized");
+    zwarnnam(MODNAME, "%s: session not initialized", BUILTIN_STARSHIP_STATS);
     return 1;
   }
 
   ssp_stats_t st;
   memset(&st, 0, sizeof(st));
   if (ssp_session_stats(g_session, &st) != 0) {
-    zwarnnam(MODNAME, "starship_native: failed to get session stats");
+    report_ffi_error(BUILTIN_STARSHIP_STATS);
     return 1;
   }
 
@@ -334,7 +346,7 @@ int boot_(UNUSED(Module m)) {
   if (!g_session) {
     char *err = NULL;
     ssp_last_error(&err);
-    zwarnnam(MODNAME, "starship_native: failed to create session: %s",
+    zwarnnam(MODNAME, "failed to create session: %s",
              err ? err : "unknown error");
     if (err) {
       ssp_free(err);
