@@ -79,12 +79,7 @@ static char **get_arr_param(const char *name, size_t *len) {
     *len = 0;
     return NULL;
   }
-  /* Count entries — zsh arrays are NULL-terminated */
-  size_t n = 0;
-  while (arr[n] != NULL) {
-    n++;
-  }
-  *len = n;
+  *len = arrlen(arr);
   return arr;
 }
 
@@ -96,7 +91,7 @@ static char **get_arr_param(const char *name, size_t *len) {
 static void set_str_param(const char *name, char *val) {
   if (!val)
     return;
-  setsparam((char *)name, metafy((char *)val, strlen(val), META_DUP));
+  setsparam((char *)name, ztrdup_metafy(val));
 }
 
 /* Report an FFI failure using the Rust-side last-error string. */
