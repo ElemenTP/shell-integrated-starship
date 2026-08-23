@@ -7,8 +7,14 @@ project(starship-native
 # Always generate compile_commands.json for tooling (LSP, clangd, etc.)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(WIN32)
+    set(BUILD_ZSH_MODULE_DEFAULT OFF)
+else()
+    set(BUILD_ZSH_MODULE_DEFAULT ON)
+endif()
+
 # ── Global options ────────────────────────────────────────────────────────
-option(BUILD_ZSH_MODULE   "Build the zsh loadable module (Linux/macOS)"     ON)
+option(BUILD_ZSH_MODULE   "Build the zsh loadable module (Linux/macOS)"     ${BUILD_ZSH_MODULE_DEFAULT})
 option(BUILD_PWSH_MODULE  "Build the PowerShell binary module"              ON)
 option(BUILD_TESTS        "Build test executables"                          ON)
 

@@ -76,8 +76,10 @@ pub struct ssp_render_input {
     pub pipestatus_len: usize,
     /// Terminal width in columns (0 = auto-detect).
     pub terminal_width: usize,
-    /// Logical working directory path (NULL = use process cwd).
+    /// working directory path (NULL = use process cwd).
     pub path: *const c_char,
+    /// Logical working directory path (for powershell and elvish)
+    pub logical_path: *const c_char,
     /// Execution duration of the last command in ms (NULL = none).
     pub cmd_duration: *const c_char,
     /// Current keymap name (NULL = "viins").
@@ -148,19 +150,20 @@ fn cstr_array_to_vec(ptr: *const *const c_char, len: usize) -> Option<Vec<String
 
 impl ssp_render_input {
     fn to_properties(&self, default_target: Target) -> Properties {
-        let mut props = Properties::default();
-        props.status_code = cstr_to_option_string(self.status);
-        props.pipestatus = cstr_array_to_vec(self.pipestatus, self.pipestatus_len);
-        props.terminal_width = self.terminal_width;
-        props.path = cstr_to_option_string(self.path).map(std::path::PathBuf::from);
-        props.logical_path = None;
-        props.cmd_duration = cstr_to_option_string(self.cmd_duration);
-        props.keymap = cstr_to_option_string(self.keymap).unwrap_or_else(|| "viins".into());
-        props.jobs = self.jobs;
-        props.shlvl = if self.shlvl >= 0 {
-            Some(self.shlvl)
-        } else {
-            None
+        let props = Properties {
+            status_code: cstr_to_option_string(self.status),
+            pipestatus: cstr_array_to_vec(self.pipestatus, self.pipestatus_len),
+            terminal_width: self.terminal_width,
+            path: cstr_to_option_string(self.path).map(std::path::PathBuf::from),
+            logical_path: cstr_to_option_string(self.logical_path).map(std::path::PathBuf::from),
+            cmd_duration: cstr_to_option_string(self.cmd_duration),
+            keymap: cstr_to_option_string(self.keymap).unwrap_or_else(|| "viins".into()),
+            jobs: self.jobs,
+            shlvl: if self.shlvl >= 0 {
+                Some(self.shlvl)
+            } else {
+                None
+            },
         };
         let _ = default_target; // used below
         props
@@ -222,28 +225,11 @@ pub extern "C" fn ssp_session_create() -> *mut SessionHandle {
     )
 }
 
-/// Shut down the session's thread pool and wait for workers to exit.
-/// Must be called before the shared library is unloaded.
-#[unsafe(no_mangle)]
-pub extern "C" fn ssp_session_shutdown(handle: *mut SessionHandle) {
-    if handle.is_null() {
-        return;
-    }
-    ffi_guard!(
-        {
-            let handle = unsafe { &*handle };
-            guard_fork!(handle, ());
-            handle.session.shutdown();
-        },
-        ()
-    );
-}
-
 /// Destroy a session previously created with `ssp_session_create`.
 ///
 /// Passing NULL is safe (no-op).
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_session_destroy(handle: *mut SessionHandle) {
+pub unsafe extern "C" fn ssp_session_destroy(handle: *mut SessionHandle) {
     if handle.is_null() {
         return;
     }
@@ -264,7 +250,7 @@ pub extern "C" fn ssp_session_destroy(handle: *mut SessionHandle) {
 /// The caller must free `*out` with `ssp_free()`.
 /// On failure, returns a negative value; check `ssp_last_error()`.
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_session_render(
+pub unsafe extern "C" fn ssp_session_render(
     handle: *mut SessionHandle,
     input: *const ssp_render_input,
     out: *mut *mut c_char,
@@ -305,7 +291,7 @@ pub extern "C" fn ssp_session_render(
 ///
 /// Passing NULL is safe (no-op).
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn ssp_free(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
@@ -334,7 +320,7 @@ pub extern "C" fn ssp_version() -> *const c_char {
 ///
 /// The caller must free `*out` with `ssp_free()`.
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_last_error(out: *mut *mut c_char) {
+pub unsafe extern "C" fn ssp_last_error(out: *mut *mut c_char) {
     if out.is_null() {
         return;
     }
@@ -352,7 +338,10 @@ pub extern "C" fn ssp_last_error(out: *mut *mut c_char) {
 ///
 /// Returns 0 on success, or a negative value if `handle` or `out` is null.
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_session_stats(handle: *mut SessionHandle, out: *mut ssp_stats) -> c_int {
+pub unsafe extern "C" fn ssp_session_stats(
+    handle: *mut SessionHandle,
+    out: *mut ssp_stats,
+) -> c_int {
     ffi_guard!(
         {
             if handle.is_null() || out.is_null() {
@@ -360,6 +349,7 @@ pub extern "C" fn ssp_session_stats(handle: *mut SessionHandle, out: *mut ssp_st
                 return -1;
             }
             let handle = unsafe { &*handle };
+            guard_fork!(handle, -1);
             let stats = handle.session.state().stats();
             let c_stats = ssp_stats {
                 config_hits: stats.config_hits,
@@ -400,13 +390,17 @@ mod tests {
     fn test_session_create_destroy() {
         let session = ssp_session_create();
         assert!(!session.is_null(), "session creation should succeed");
-        ssp_session_destroy(session);
+        unsafe {
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test that destroying NULL is safe.
     #[test]
     fn test_session_destroy_null() {
-        ssp_session_destroy(ptr::null_mut());
+        unsafe {
+            ssp_session_destroy(ptr::null_mut());
+        }
     }
 
     /// Test rendering with NULL arguments returns error.
@@ -415,14 +409,16 @@ mod tests {
         let session = ssp_session_create();
         assert!(!session.is_null());
 
-        let mut out: *mut c_char = ptr::null_mut();
-        let rc = ssp_session_render(session, ptr::null(), &mut out);
-        assert!(rc < 0, "null input should return error");
+        unsafe {
+            let mut out: *mut c_char = ptr::null_mut();
+            let rc = ssp_session_render(session, ptr::null(), &mut out);
+            assert!(rc < 0, "null input should return error");
 
-        let rc = ssp_session_render(ptr::null_mut(), ptr::null(), &mut out);
-        assert!(rc < 0, "null handle should return error");
+            let rc = ssp_session_render(ptr::null_mut(), ptr::null(), &mut out);
+            assert!(rc < 0, "null handle should return error");
 
-        ssp_session_destroy(session);
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test rendering a main prompt.
@@ -438,6 +434,7 @@ mod tests {
             pipestatus_len: 0,
             terminal_width: 80,
             path: ptr::null(),
+            logical_path: ptr::null(),
             cmd_duration: ptr::null(),
             keymap: ptr::null(),
             jobs: 0,
@@ -445,16 +442,18 @@ mod tests {
             target: 0,
         };
 
-        let mut out: *mut c_char = ptr::null_mut();
-        let rc = ssp_session_render(session, &input as *const _, &mut out);
-        assert_eq!(rc, 0, "render should succeed");
-        assert!(!out.is_null(), "output should be non-null");
+        unsafe {
+            let mut out: *mut c_char = ptr::null_mut();
+            let rc = ssp_session_render(session, &input as *const _, &mut out);
+            assert_eq!(rc, 0, "render should succeed");
+            assert!(!out.is_null(), "output should be non-null");
 
-        let output = unsafe { CStr::from_ptr(out) }.to_str().unwrap();
-        assert!(!output.is_empty(), "output should not be empty");
+            let output = CStr::from_ptr(out).to_str().unwrap();
+            assert!(!output.is_empty(), "output should not be empty");
 
-        ssp_free(out);
-        ssp_session_destroy(session);
+            ssp_free(out);
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test rendering a right prompt.
@@ -469,6 +468,7 @@ mod tests {
             pipestatus_len: 0,
             terminal_width: 80,
             path: ptr::null(),
+            logical_path: ptr::null(),
             cmd_duration: ptr::null(),
             keymap: ptr::null(),
             jobs: 0,
@@ -476,11 +476,13 @@ mod tests {
             target: 1, // Right
         };
 
-        let mut out: *mut c_char = ptr::null_mut();
-        let rc = ssp_session_render(session, &input as *const _, &mut out);
-        assert_eq!(rc, 0, "right prompt render should succeed");
-        ssp_free(out);
-        ssp_session_destroy(session);
+        unsafe {
+            let mut out: *mut c_char = ptr::null_mut();
+            let rc = ssp_session_render(session, &input as *const _, &mut out);
+            assert_eq!(rc, 0, "right prompt render should succeed");
+            ssp_free(out);
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test that version returns a non-null string.
@@ -505,28 +507,33 @@ mod tests {
             pipestatus_len: 0,
             terminal_width: 80,
             path: ptr::null(),
+            logical_path: ptr::null(),
             cmd_duration: ptr::null(),
             keymap: ptr::null(),
             jobs: 0,
             shlvl: -1,
             target: 0,
         };
-        let mut out: *mut c_char = ptr::null_mut();
-        ssp_session_render(session, &input as *const _, &mut out);
-        ssp_free(out);
+        unsafe {
+            let mut out: *mut c_char = ptr::null_mut();
+            ssp_session_render(session, &input as *const _, &mut out);
+            ssp_free(out);
 
-        let mut stats: ssp_stats = ssp_stats::default();
-        let rc = ssp_session_stats(session, &mut stats as *mut _);
-        assert_eq!(rc, 0);
-        assert!(stats.renders > 0, "should have at least one render");
+            let mut stats: ssp_stats = ssp_stats::default();
+            let rc = ssp_session_stats(session, &mut stats as *mut _);
+            assert_eq!(rc, 0);
+            assert!(stats.renders > 0, "should have at least one render");
 
-        ssp_session_destroy(session);
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test that ssp_free handles NULL safely.
     #[test]
     fn test_free_null() {
-        ssp_free(ptr::null_mut());
+        unsafe {
+            ssp_free(ptr::null_mut());
+        }
     }
 
     /// Test pipestatus conversion.
@@ -546,6 +553,7 @@ mod tests {
             pipestatus_len: 2,
             terminal_width: 80,
             path: ptr::null(),
+            logical_path: ptr::null(),
             cmd_duration: ptr::null(),
             keymap: ptr::null(),
             jobs: 0,
@@ -553,11 +561,13 @@ mod tests {
             target: 0,
         };
 
-        let mut out: *mut c_char = ptr::null_mut();
-        let rc = ssp_session_render(session, &input as *const _, &mut out);
-        assert_eq!(rc, 0, "render with pipestatus should succeed");
-        ssp_free(out);
-        ssp_session_destroy(session);
+        unsafe {
+            let mut out: *mut c_char = ptr::null_mut();
+            let rc = ssp_session_render(session, &input as *const _, &mut out);
+            assert_eq!(rc, 0, "render with pipestatus should succeed");
+            ssp_free(out);
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test cache behavior: two renders in the same directory should produce cache hits.
@@ -572,6 +582,7 @@ mod tests {
             pipestatus_len: 0,
             terminal_width: 80,
             path: ptr::null(),
+            logical_path: ptr::null(),
             cmd_duration: ptr::null(),
             keymap: ptr::null(),
             jobs: 0,
@@ -579,48 +590,49 @@ mod tests {
             target: 0,
         };
 
-        // First render.
-        let mut out: *mut c_char = ptr::null_mut();
-        let rc = ssp_session_render(session, &input as *const _, &mut out);
-        assert_eq!(rc, 0);
-        let first_output = unsafe { CStr::from_ptr(out) }.to_str().unwrap().to_string();
-        ssp_free(out);
+        unsafe {
+            // First render.
+            let mut out: *mut c_char = ptr::null_mut();
+            let rc = ssp_session_render(session, &input as *const _, &mut out);
+            assert_eq!(rc, 0);
+            let first_output = CStr::from_ptr(out).to_str().unwrap().to_string();
+            ssp_free(out);
 
-        // Second render (within TTL, should use cached data).
-        let mut out2: *mut c_char = ptr::null_mut();
-        let rc2 = ssp_session_render(session, &input as *const _, &mut out2);
-        assert_eq!(rc2, 0);
-        let second_output = unsafe { CStr::from_ptr(out2) }
-            .to_str()
-            .unwrap()
-            .to_string();
-        ssp_free(out2);
+            // Second render (within TTL, should use cached data).
+            let mut out2: *mut c_char = ptr::null_mut();
+            let rc2 = ssp_session_render(session, &input as *const _, &mut out2);
+            assert_eq!(rc2, 0);
+            let second_output = CStr::from_ptr(out2).to_str().unwrap().to_string();
+            ssp_free(out2);
 
-        // Both renders should produce the same output in an empty directory.
-        assert_eq!(
-            first_output, second_output,
-            "consecutive renders in same directory should produce same output"
-        );
+            // Both renders should produce the same output in an empty directory.
+            assert_eq!(
+                first_output, second_output,
+                "consecutive renders in same directory should produce same output"
+            );
 
-        ssp_session_destroy(session);
+            ssp_session_destroy(session);
+        }
     }
 
     /// Test that panic in render doesn't crash the host process.
     #[test]
     fn test_error_recovery() {
-        // ssp_last_error should return null initially.
-        let mut err: *mut c_char = ptr::null_mut();
-        ssp_last_error(&mut err);
-        assert!(err.is_null(), "no error should be set initially");
+        unsafe {
+            // ssp_last_error should return null initially.
+            let mut err: *mut c_char = ptr::null_mut();
+            ssp_last_error(&mut err);
+            assert!(err.is_null(), "no error should be set initially");
 
-        // Render with null input should fail but not crash.
-        let mut out: *mut c_char = ptr::null_mut();
-        let rc = ssp_session_render(ptr::null_mut(), ptr::null(), &mut out);
-        assert!(rc < 0, "null everything should return error");
+            // Render with null input should fail but not crash.
+            let mut out: *mut c_char = ptr::null_mut();
+            let rc = ssp_session_render(ptr::null_mut(), ptr::null(), &mut out);
+            assert!(rc < 0, "null everything should return error");
 
-        // Should have an error message now.
-        ssp_last_error(&mut err);
-        assert!(!err.is_null(), "error should be set after failure");
-        ssp_free(err);
+            // Should have an error message now.
+            ssp_last_error(&mut err);
+            assert!(!err.is_null(), "error should be set after failure");
+            ssp_free(err);
+        }
     }
 }

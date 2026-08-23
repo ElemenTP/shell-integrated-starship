@@ -205,7 +205,8 @@ function global:prompt {
                 [long]$jobs,        # jobs
                 0,                  # shlvl
                 [ulong]$width,      # width
-                $cwd.LogicalPath,   # path
+                $cwd.Path,          # path
+                $cwd.LogicalPath,   # logicalpath
                 $keymap,            # keymap
                 0                   # target: Main
             )
@@ -253,7 +254,7 @@ try {
     $session = Get-Session
     $contPrompt = $session.Render(
         $null, $null, $null, 0, 0, 0,  # no props needed for continuation
-        $null, $null, 2)                # target: Continuation
+        $null, $null, $null, 2)        # target: Continuation
     Set-PSReadLineOption -ContinuationPrompt $contPrompt
 } catch {
     Set-PSReadLineOption -ContinuationPrompt "> "
@@ -316,6 +317,8 @@ Export-ModuleMember -Function @(
 $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
     if ($null -ne $script:starshipOriginalPrompt) {
         Set-Item -Path function:\prompt -Value $script:starshipOriginalPrompt
+    } else {
+        Remove-Item -Path function:\prompt -ErrorAction Ignore
     }
     if ($null -ne $script:__Session) {
         try { $script:__Session.Dispose() } catch {}

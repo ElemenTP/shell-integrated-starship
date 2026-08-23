@@ -21,7 +21,8 @@ typedef struct {
   const char *const *pipestatus; /* NULL or array of pipe-status strings */
   size_t pipestatus_len;         /* Number of entries in pipestatus */
   size_t terminal_width;         /* 0 = auto-detect from terminal */
-  const char *path;              /* Logical cwd; NULL = process cwd */
+  const char *path;              /* cwd path; NULL = process cwd */
+  const char *logical_path;      /* logical cwd path; NULL = process cwd */
   const char *cmd_duration;      /* Duration string in ms; NULL = none */
   const char *keymap;            /* Keymap name; NULL = "viins" */
   long long jobs;                /* Number of background jobs */
@@ -42,7 +43,6 @@ typedef struct {
 
 /* Session lifecycle. */
 ssp_session_t *ssp_session_create(void);
-void ssp_session_shutdown(ssp_session_t *s);
 void ssp_session_destroy(ssp_session_t *s);
 
 /* Render a prompt. Returns 0 on success, <0 on error.
@@ -56,7 +56,8 @@ void ssp_free(char *ptr);
 /* Return the library version string (static, no free needed). */
 const char *ssp_version(void);
 
-/* Return the last error message (static mutex guarded, copy out, should be freed with ssp_free). */
+/* Return the last error message (static mutex guarded, copy out, should be
+ * freed with ssp_free). */
 void ssp_last_error(char **out);
 
 /* Retrieve session statistics. Returns 0 on success. */

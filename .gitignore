@@ -144,3 +144,6 @@ build
 # Build dirs
 starship
 zsh-*
+
+# CMake install staging
+/prefix/

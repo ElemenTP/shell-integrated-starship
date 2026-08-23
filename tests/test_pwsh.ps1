@@ -12,11 +12,10 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 Write-Host "=== pwsh integration test ==="
-Write-Host "DLL dir: $DllDir"
-
 if (-not $DllDir) {
     $DllDir = "$PSScriptRoot/../pwsh_src/StarshipNative/bin/Release/net8.0"
 }
+Write-Host "DLL dir: $DllDir"
 
 # Verify the assembly exists
 $asmPath = Join-Path $DllDir "StarshipNative.dll"
@@ -50,7 +49,7 @@ try {
     Write-Host "PASS: session created"
 
     # Render main prompt
-    $result = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, 0)
+    $result = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 0)
     if ($result.Length -gt 0) {
         Write-Host "PASS: prompt rendered ($($result.Length) chars)"
     } else {
@@ -60,8 +59,12 @@ try {
     }
 
     # Render right prompt
-    $rightResult = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, 1)
+    $rightResult = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 1)
     Write-Host "PASS: right prompt rendered ($($rightResult.Length) chars)"
+
+    # Render continuation prompt
+    $rightResult = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 2)
+    Write-Host "PASS: continuation prompt rendered ($($rightResult.Length) chars)"
 
     # Get stats
     $stats = $session.GetStatsReport()

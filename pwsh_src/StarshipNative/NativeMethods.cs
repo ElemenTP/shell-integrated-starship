@@ -65,10 +65,6 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(LibName, EntryPoint = "ssp_session_create")]
     internal static partial IntPtr SessionCreate();
 
-    /// <summary>Shutdown a session. Passing <see cref="IntPtr.Zero"/> is safe (no-op).</summary>
-    [LibraryImport(LibName, EntryPoint = "ssp_session_shutdown")]
-    internal static partial void SessionShutdown(IntPtr session);
-
     /// <summary>Destroy a session. Passing <see cref="IntPtr.Zero"/> is safe (no-op).</summary>
     [LibraryImport(LibName, EntryPoint = "ssp_session_destroy")]
     internal static partial void SessionDestroy(IntPtr session);
@@ -127,6 +123,7 @@ internal struct SspRenderInput
     public UIntPtr PipestatusLen; // size_t
     public UIntPtr TerminalWidth; // size_t
     public IntPtr Path;           // const char*
+    public IntPtr LogicalPath;    // const char*
     public IntPtr CmdDuration;    // const char*
     public IntPtr Keymap;         // const char*
     public long Jobs;             // int64

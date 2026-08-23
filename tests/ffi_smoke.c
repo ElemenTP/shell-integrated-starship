@@ -21,6 +21,7 @@ typedef struct {
   size_t pipestatus_len;
   size_t terminal_width;
   const char *path;
+  const char *logical_path;
   const char *cmd_duration;
   const char *keymap;
   long long jobs;
@@ -46,7 +47,7 @@ static int (*fn_session_render)(ssp_session_t *, const ssp_render_input_t *,
                                 char **);
 static void (*fn_free)(char *);
 static const char *(*fn_version)(void);
-static const char *(*fn_last_error)(void);
+static void (*fn_last_error)(char **out);
 static int (*fn_session_stats)(const ssp_session_t *, ssp_stats_t *);
 
 static int passed = 0, failed = 0;

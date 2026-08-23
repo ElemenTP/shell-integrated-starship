@@ -46,7 +46,8 @@ public sealed class Session : IDisposable
     /// <param name="jobs">Number of background jobs.</param>
     /// <param name="shlvl">SHLVL value, or 0 for none.</param>
     /// <param name="width">Terminal width in columns, or 0 for auto-detect.</param>
-    /// <param name="path">Logical working directory, or null for process cwd.</param>
+    /// <param name="path">Working directory, or null for process cwd.</param>
+    /// <param name="logicalpath">Logical working directory.</param>
     /// <param name="keymap">Current keymap, or null for "viins".</param>
     /// <param name="target">0=Main, 1=Right, 2=Continuation.</param>
     /// <returns>The rendered prompt string.</returns>
@@ -58,6 +59,7 @@ public sealed class Session : IDisposable
         long shlvl = 0,
         ulong width = 0,
         string? path = null,
+        string? logicalpath = null,
         string? keymap = null,
         int target = 0)
     {
@@ -67,7 +69,7 @@ public sealed class Session : IDisposable
         // NativeInput owns every block and is freed in the finally below, so
         // nothing leaks even if the native call throws.
         var input = BuildInput(status, pipestatus, duration, jobs, shlvl,
-                               width, path, keymap, target);
+                               width, path, logicalpath, keymap, target);
         try
         {
             // Pass the struct by address (it's a [StructLayout(Sequential)] value type).
@@ -152,7 +154,6 @@ public sealed class Session : IDisposable
     {
         if (!_disposed && _handle != IntPtr.Zero)
         {
-            NativeMethods.SessionShutdown(_handle);
             NativeMethods.SessionDestroy(_handle);
             _handle = IntPtr.Zero;
         }
@@ -171,6 +172,7 @@ public sealed class Session : IDisposable
         long shlvl,
         ulong width,
         string? path,
+        string? logicalpath,
         string? keymap,
         int target)
     {
@@ -184,6 +186,7 @@ public sealed class Session : IDisposable
                 PipestatusLen = (UIntPtr)(pipestatus?.Length ?? 0),
                 TerminalWidth = (UIntPtr)width,
                 Path = native.AllocUtf8(path),
+                LogicalPath = native.AllocUtf8(logicalpath),
                 CmdDuration = native.AllocUtf8(duration),
                 Keymap = native.AllocUtf8(keymap),
                 Jobs = jobs,

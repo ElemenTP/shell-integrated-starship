@@ -59,10 +59,8 @@ _starship_native_dirs+=(
 )
 
 # STARSHIP_NATIVE_DIR is also the resolved module directory (exported so users
-# can see where the module was loaded from); STARSHIP_NATIVE_FFI is the ffi lib
-# when it is colocated with the module (optional — the module RPATH covers it).
+# can see where the module was loaded from);
 typeset -g STARSHIP_NATIVE_DIR=""
-typeset -g STARSHIP_NATIVE_FFI=""
 
 typeset _dir _mod _ffi _found=0
 for _dir in "${_starship_native_dirs[@]}"; do
@@ -73,7 +71,6 @@ for _dir in "${_starship_native_dirs[@]}"; do
       _found=1
       for _ffi in "${_starship_native_ffis[@]}"; do
         if [[ -f "$_dir/$_ffi" ]]; then
-          STARSHIP_NATIVE_FFI="$_dir/$_ffi"
           break
         fi
       done
@@ -82,6 +79,8 @@ for _dir in "${_starship_native_dirs[@]}"; do
   done
   (( _found )) && break
 done
+unset _STARSHIP_NATIVE_SCRIPT_DIR _starship_native_mods _starship_native_ffis \
+      _starship_native_dirs _dir _mod _ffi _found
 
 if [[ -z "$STARSHIP_NATIVE_DIR" ]]; then
   print -u2 "starship-native: compiled module (starship_native) not found."
@@ -89,7 +88,6 @@ if [[ -z "$STARSHIP_NATIVE_DIR" ]]; then
   print -u2 "    cmake -B build -S . && cmake --build build --config Release"
   print -u2 "    cmake --install build --config Release --prefix \$HOME/.local"
   print -u2 "  Or point STARSHIP_NATIVE_DIR at the installed lib/zsh directory."
-  unset _starship_native_dirs _starship_native_mods _starship_native_ffis
   return 1
 fi
 

@@ -156,6 +156,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
   input.pipestatus_len = pipestatus_len;
   input.terminal_width = terminal_width;
   input.path = NULL; /* Use process cwd (matches stock behavior) */
+  input.logical_path = NULL; /* No input for zsh (matches stock behavior) */
   input.cmd_duration = duration_str;
   input.keymap = keymap_str ? keymap_str : "viins";
   input.jobs = (long long)jobs_count;
@@ -355,7 +356,6 @@ int boot_(UNUSED(Module m)) {
 int cleanup_(Module m) {
   /* Shut down the thread pool before freeing the session */
   if (g_session) {
-    ssp_session_shutdown(g_session);
     ssp_session_destroy(g_session);
     g_session = NULL;
   }
