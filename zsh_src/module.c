@@ -215,7 +215,7 @@ static int bin_ssp_version(UNUSED(char *name), char **argv, UNUSED(Options ops),
   setsparam((char *)"STARSHIP_VERSION", ztrdup(version));
 
   if (!quiet) {
-    printf("%s", version);
+    printf("%s\n", version);
   }
 
   return 0;
