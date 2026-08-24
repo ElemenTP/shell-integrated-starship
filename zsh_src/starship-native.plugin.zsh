@@ -24,7 +24,6 @@
 if (( ${+_STARSHIP_NATIVE_LOADED} )); then
   return 0
 fi
-typeset -g _STARSHIP_NATIVE_LOADED=1
 
 # Locate this script's directory (works under any plugin manager).
 0="${${ZERO:-${0:#$ZSH_ARGZERO}}:-${(%):-%N}}"
@@ -97,6 +96,8 @@ zmodload starship_native || {
   print -u2 "starship-native: failed to load starship_native from $STARSHIP_NATIVE_DIR"
   return 1
 }
+
+typeset -g _STARSHIP_NATIVE_LOADED=1
 
 # ---- Shell detection — MUST be set before first render (get_shell() OnceLock) ----
 export STARSHIP_SHELL="zsh"
