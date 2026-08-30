@@ -257,7 +257,19 @@ pub unsafe extern "C" fn ssp_session_render(
 ) -> c_int {
     ffi_guard!(
         {
-            if handle.is_null() || input.is_null() || out.is_null() {
+            if out.is_null() {
+                set_error("ssp_session_render: null argument");
+                return -1;
+            }
+
+            // Always reset the caller's output slot before any other
+            // validation. On failure the caller may otherwise keep a
+            // stale/dangling pointer from a previous call.
+            // SAFETY: `out` was checked non-null above and is writable for the
+            // duration of this call.
+            unsafe { *out = ptr::null_mut() };
+
+            if handle.is_null() || input.is_null() {
                 set_error("ssp_session_render: null argument");
                 return -1;
             }
