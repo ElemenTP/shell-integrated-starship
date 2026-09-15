@@ -41,27 +41,40 @@ typedef struct {
   unsigned long long renders;
 } ssp_stats_t;
 
-/* Session lifecycle. */
-ssp_session_t *ssp_session_create(void);
-void ssp_session_destroy(ssp_session_t *s);
+/*
+ * Error protocol for all fallible functions below:
+ *   NULL  -> success
+ *   other -> pointer to a NUL-terminated UTF-8 error message allocated by the
+ *            library. The caller MUST release it with ssp_free().
+ *
+ * There are no global or per-session error slots to read after a call;
+ * the error is carried directly by the return value.
+ */
 
-/* Render a prompt. Returns 0 on success, <0 on error.
- * The caller must free *out with ssp_free(). */
-int ssp_session_render(ssp_session_t *s, const ssp_render_input_t *in,
-                       char **out);
+/* Create a session. On success writes the handle to *out and returns NULL.
+ * On failure sets *out to NULL and returns an allocated error string. */
+char *ssp_session_create(ssp_session_t **out);
 
-/* Free a string returned by ssp_session_render. NULL is safe. */
+/* Destroy a session. NULL handle is a successful no-op. */
+char *ssp_session_destroy(ssp_session_t *s);
+
+/* Render a prompt. On success writes the prompt to *out and returns NULL.
+ * On failure sets *out to NULL and returns an allocated error string. */
+char *ssp_session_render(ssp_session_t *s, const ssp_render_input_t *in,
+                         char **out);
+
+/* Retrieve session statistics. On success writes the snapshot to *out and
+ * returns NULL, otherwise returns an allocated error string. */
+char *ssp_session_stats(ssp_session_t *s, ssp_stats_t *out);
+
+/* Free a string returned by any fallible ssp_* function, or a prompt string
+ * returned by ssp_session_render. NULL is safe. This function cannot fail and
+ * therefore returns void rather than an error string. */
 void ssp_free(char *ptr);
 
-/* Return the library version string (static, no free needed). */
+/* Return the library version string (static, no free needed). This accessor
+ * cannot fail; it is not part of the error protocol. */
 const char *ssp_version(void);
-
-/* Return the last error message (static mutex guarded, copy out, should be
- * freed with ssp_free). */
-void ssp_last_error(char **out);
-
-/* Retrieve session statistics. Returns 0 on success. */
-int ssp_session_stats(const ssp_session_t *s, ssp_stats_t *out);
 
 #ifdef __cplusplus
 }

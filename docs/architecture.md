@@ -93,24 +93,24 @@ Starship 的 104 个模块实现均为纯函数 `fn(&Context) -> Option<Module>`
 ### 4. FFI API 设计
 
 ```c
-// 生命周期
-ssp_session_t *ssp_session_create(void);
-void ssp_session_shutdown(ssp_session_t *s);  // 关闭线程池，阻塞等待 worker 退出
-void ssp_session_destroy(ssp_session_t *s);
+// 错误协议：可失败函数返回 char*，NULL 表示成功，非 NULL 为错误字符串（需 ssp_free）
+char *ssp_session_create(ssp_session_t **out);
+char *ssp_session_destroy(ssp_session_t *s);
+char *ssp_session_render(ssp_session_t *s, const ssp_render_input_t *in, char **out);
+char *ssp_session_stats(ssp_session_t *s, ssp_stats_t *out);
 
-// 渲染
-int  ssp_session_render(ssp_session_t *s, const ssp_render_input_t *in, char **out);
+// ssp_free 本身不会失败，保持 void；ssp_version 返回静态字符串，不参与错误协议
 void ssp_free(char *ptr);
-
-// 元数据
 const char *ssp_version(void);
-void        ssp_last_error(char **out);  // 写入错误消息，调用者需 ssp_free
-
-// 统计
-int  ssp_session_stats(const ssp_session_t *s, ssp_stats_t *out);
 ```
 
-`ssp_session_render` 返回 Rust 分配的内存，调用者必须通过 `ssp_free` 释放。
+`ssp_session_render` 的提示字符串写在 `*out`；`ssp_session_create` 的 handle 写在 `*out`；
+`ssp_session_stats` 的快照写在 `*out`。所有由库分配、返回给调用方的字符串（包括提示串和错误串）
+都必须通过 `ssp_free` 释放。
+
+**错误获取约定**：错误不再存放在任何全局或 session 错误槽中。每次调用的返回值就是本次调用的
+结果：`NULL` 成功，非 `NULL` 为错误字符串；调用方直接读取并 `ssp_free` 即可，不存在跨 session
+覆盖或读取过期的竞态。
 
 **进程安全机制**：
 
@@ -118,7 +118,7 @@ int  ssp_session_stats(const ssp_session_t *s, ssp_stats_t *out);
 | ---------------------------- | ------------------------------------------------------------------------------- |
 | Fork guard (`creator_pid`) | zsh 的`$()`、`&`、管道会 fork 不 exec 的子进程；FFI 检测 PID 变化并拒绝调用 |
 | Scoped rayon pool            | 替代全局池，`shutdown()` 可终止所有 worker 线程，dlclose 安全                 |
-| 全局 Mutex 错误记录          | 避免 TLS 析构器在宿主线程上悬挂（macOS/Windows 无 DSO 保护）                    |
+| 错误即返回值                 | 可失败调用直接返回错误字符串，无全局/session 错误槽，无共享状态与 TLS 析构器 |
 
 ### 5. Shell 集成契约
 

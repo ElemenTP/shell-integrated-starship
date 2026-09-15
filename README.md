@@ -284,7 +284,7 @@ cmake --build build --config Release --target test-pwsh
 | ----------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | **Fork guard**    | zsh 的`$()`、`&`、管道会 fork 不 exec 的子进程，继承损坏的 rayon 运行时 → SIGSEGV | Session 记录创建时 PID，FFI 入口检测并拒绝 fork 子进程调用                    |
 | **线程池清理**    | rayon 全局池无法关闭；dlclose 后线程访问已卸载代码                                     | 改用 scoped`ThreadPool`，`ssp_session_shutdown()` 发信号+等待 worker 退出 |
-| **无 TLS 析构器** | `thread_local!` 在宿主线程注册析构器，dlclose 后悬挂（macOS/Windows 无保护）         | 改用全局`Mutex`，无每线程状态                                               |
+| **错误即返回值** | `thread_local!` 会悬挂；全局/session 错误槽存在“读取前被覆盖”的窗口             | 可失败函数返回 `char*`：NULL 成功，非 NULL 错误串（调用方 `ssp_free`）        |
 
 详细分析见 `docs/implementation-notes.md` §9。
 

@@ -18,8 +18,11 @@ namespace StarshipNative;
 /// falling back to default .NET resolution (which probes the directory of
 /// this assembly — exactly where PowerShell Gallery extracts the module).
 ///
-/// Strings returned by ssp_session_render and ssp_last_error must be freed
-/// with ssp_free. ssp_version strings are static and must NOT be freed.
+/// Fallible exports return a `char *` error: <see cref="IntPtr.Zero"/> means
+/// success, and a non-zero value is an allocated error string that must be
+/// freed with <see cref="Free"/>. Prompt strings returned through an out
+/// parameter must also be freed with <see cref="Free"/>. ssp_version strings
+/// are static and must NOT be freed.
 /// </summary>
 internal static unsafe partial class NativeMethods
 {
@@ -61,27 +64,39 @@ internal static unsafe partial class NativeMethods
 
     // ── Session lifecycle ──────────────────────────────────────────────
 
-    /// <summary>Create a new prompt rendering session. Returns <see cref="IntPtr.Zero"/> on failure.</summary>
+    /// <summary>
+    /// Create a new prompt rendering session. Returns <see cref="IntPtr.Zero"/>
+    /// on success or an allocated error string; on failure
+    /// <paramref name="session"/> is set to <see cref="IntPtr.Zero"/>.
+    /// </summary>
     [LibraryImport(LibName, EntryPoint = "ssp_session_create")]
-    internal static partial IntPtr SessionCreate();
+    internal static partial IntPtr SessionCreate(out IntPtr session);
 
-    /// <summary>Destroy a session. Passing <see cref="IntPtr.Zero"/> is safe (no-op).</summary>
+    /// <summary>
+    /// Destroy a session. Passing <see cref="IntPtr.Zero"/> is a successful
+    /// no-op. Returns <see cref="IntPtr.Zero"/> on success or an allocated
+    /// error string.
+    /// </summary>
     [LibraryImport(LibName, EntryPoint = "ssp_session_destroy")]
-    internal static partial void SessionDestroy(IntPtr session);
+    internal static partial IntPtr SessionDestroy(IntPtr session);
 
     // ── Prompt rendering ────────────────────────────────────────────────
 
     /// <summary>
-    /// Render a prompt. On success (return 0), writes a Rust-allocated
-    /// UTF-8 string to <paramref name="output"/>. The caller must free it
-    /// with <see cref="ssp_free"/>. On failure (return &lt;0), check
-    /// <see cref="ssp_last_error"/>.
+    /// Render a prompt. Returns <see cref="IntPtr.Zero"/> on success and
+    /// writes a Rust-allocated UTF-8 prompt string to
+    /// <paramref name="output"/> (free it with <see cref="Free"/>). On failure
+    /// returns an allocated error string and sets <paramref name="output"/> to
+    /// <see cref="IntPtr.Zero"/>.
     /// </summary>
     [LibraryImport(LibName, EntryPoint = "ssp_session_render")]
-    internal static partial int SessionRender(
+    internal static partial IntPtr SessionRender(
         IntPtr session, IntPtr input, out IntPtr output);
 
-    /// <summary>Free a string returned by <see cref="ssp_session_render"/>. NULL-safe.</summary>
+    /// <summary>
+    /// Free a string returned by any fallible ssp_* call. NULL-safe. This
+    /// function cannot fail and returns void.
+    /// </summary>
     [LibraryImport(LibName, EntryPoint = "ssp_free")]
     internal static partial void Free(IntPtr ptr);
 
@@ -95,19 +110,15 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(LibName, EntryPoint = "ssp_version")]
     internal static partial IntPtr Version();
 
-    /// <summary>
-    /// Return the last error as a Rust-allocated null-terminated UTF-8 string.
-    /// The caller must free it with <see cref="ssp_free"/>. Returns
-    /// <see cref="IntPtr.Zero"/> if no error.
-    /// </summary>
-    [LibraryImport(LibName, EntryPoint = "ssp_last_error")]
-    internal static partial void LastError(out IntPtr output);
-
     // ── Statistics ──────────────────────────────────────────────────────
 
-    /// <summary>Retrieve cache performance statistics. Returns 0 on success.</summary>
+    /// <summary>
+    /// Retrieve cache performance statistics. Returns <see cref="IntPtr.Zero"/>
+    /// on success and writes the snapshot to <paramref name="stats"/>; on
+    /// failure returns an allocated error string.
+    /// </summary>
     [LibraryImport(LibName, EntryPoint = "ssp_session_stats")]
-    internal static partial int SessionStats(
+    internal static partial IntPtr SessionStats(
         IntPtr session, out SspStats stats);
 }
 

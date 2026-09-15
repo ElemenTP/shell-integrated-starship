@@ -6,7 +6,10 @@
 //! # Safety
 //!
 //! All FFI functions use `catch_unwind` wrappers to prevent Rust panics from
-//! unwinding across the FFI boundary. Errors are reported via return codes and
-//! a global mutex guarded error string accessible via `ssp_last_error()`.
+//! unwinding across the FFI boundary.
+//!
+//! Fallible exports return `char *`: NULL means success, and a non-NULL value
+//! is an allocated error string the caller must release with `ssp_free()`.
+//! There are no global or per-session error slots to read afterwards.
 
 pub mod ffi;

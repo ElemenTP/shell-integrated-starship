@@ -17,6 +17,10 @@ namespace StarshipNative;
 ///       target: 0  // Main
 ///   );
 ///   session.Dispose();
+///
+/// Native failures are surfaced directly as the allocated error string
+/// returned by each FFI call; the wrapper frees it and includes its text in
+/// the thrown exception.
 /// </summary>
 public sealed class Session : IDisposable
 {
@@ -28,12 +32,11 @@ public sealed class Session : IDisposable
     /// </summary>
     public Session()
     {
-        _handle = NativeMethods.SessionCreate();
-        if (_handle == IntPtr.Zero)
+        IntPtr err = NativeMethods.SessionCreate(out _handle);
+        if (err != IntPtr.Zero)
         {
-            string? err = LastError();
             throw new InvalidOperationException(
-                $"Failed to create starship session: {err ?? "unknown error"}");
+                $"Failed to create starship session: {TakeError(err)}");
         }
     }
 
@@ -77,12 +80,16 @@ public sealed class Session : IDisposable
             try
             {
                 Marshal.StructureToPtr(input.Input, inputPtr, false);
-                int rc = NativeMethods.SessionRender(_handle, inputPtr, out IntPtr output);
-                if (rc != 0 || output == IntPtr.Zero)
+                IntPtr err = NativeMethods.SessionRender(_handle, inputPtr, out IntPtr output);
+                if (err != IntPtr.Zero)
                 {
-                    string? err = LastError();
                     throw new InvalidOperationException(
-                        $"ssp_session_render failed (rc={rc}): {err ?? "unknown error"}");
+                        $"ssp_session_render failed: {TakeError(err)}");
+                }
+                if (output == IntPtr.Zero)
+                {
+                    throw new InvalidOperationException(
+                        "ssp_session_render succeeded but returned no output");
                 }
 
                 try
@@ -115,16 +122,21 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
-    /// Get the last error message, or null if no error.
+    /// Convert an allocated native error string into a managed string and free
+    /// the native allocation.
     /// </summary>
-    public static string? LastError()
+    private static string TakeError(IntPtr err)
     {
-        NativeMethods.LastError(out IntPtr ptr);
-        if (ptr == IntPtr.Zero)
-            return null;
-        string? ret = Marshal.PtrToStringUTF8(ptr);
-        NativeMethods.Free(ptr);
-        return ret;
+        if (err == IntPtr.Zero)
+            return "unknown error";
+        try
+        {
+            return Marshal.PtrToStringUTF8(err) ?? "unknown error";
+        }
+        finally
+        {
+            NativeMethods.Free(err);
+        }
     }
 
     /// <summary>
@@ -134,12 +146,11 @@ public sealed class Session : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        int rc = NativeMethods.SessionStats(_handle, out var stats);
-        if (rc != 0)
+        IntPtr err = NativeMethods.SessionStats(_handle, out var stats);
+        if (err != IntPtr.Zero)
         {
-            string? err = LastError();
             throw new InvalidOperationException(
-                $"ssp_session_stats failed: {err ?? "unknown error"}");
+                $"ssp_session_stats failed: {TakeError(err)}");
         }
         return $"Renders: {stats.Renders}, " +
                $"Config: {stats.ConfigHits}h/{stats.ConfigMisses}m, " +
@@ -154,7 +165,13 @@ public sealed class Session : IDisposable
     {
         if (!_disposed && _handle != IntPtr.Zero)
         {
-            NativeMethods.SessionDestroy(_handle);
+            IntPtr err = NativeMethods.SessionDestroy(_handle);
+            if (err != IntPtr.Zero)
+            {
+                // Dispose must not throw; consume the native error so it does
+                // not leak.
+                TakeError(err);
+            }
             _handle = IntPtr.Zero;
         }
         _disposed = true;

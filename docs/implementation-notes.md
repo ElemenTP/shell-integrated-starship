@@ -89,36 +89,53 @@ Rust 2024 edition 中 `#[no_mangle]` 被标记为 unsafe 属性，必须写作�
 pub extern "C" fn ssp_session_create() -> *mut SessionHandle { ... }
 ```
 
-### 2.2 panic 隔离
+### 2.2 panic 隔离与错误返回
 
-所有 FFI 导出函数必须包裹在 `catch_unwind` 中，防止 Rust panic 展开到 C 调用栈（未定义行为）：
+所有 FFI 导出函数必须包裹在 `catch_unwind` 中，防止 Rust panic 展开到 C 调用栈（未定义行为）。
+
+可失败的导出函数统一使用以下错误协议：
+
+- 返回 `char *`；
+- `NULL` 表示成功；
+- 非 `NULL` 是库分配的、以 NUL 结尾的 UTF-8 错误字符串，调用方必须用 `ssp_free()` 释放。
+
+错误不存储在全局变量，也不存储在 session 中——它直接是本次调用的返回值。因此不存在
+“调用方还未来得及读取就被其他 session/线程覆盖”的竞态，也不需要 TLS 析构器。
 
 ```rust
-macro_rules! ffi_guard {
-    ($expr:expr, $error_val:expr) => {{
+macro_rules! ffi_guard_error {
+    ($expr:expr) => {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $expr)) {
-            Ok(result) => result,
-            Err(panic) => {
-                // 将 panic 消息存入线程局部 LAST_ERROR
-                set_error(&format_panic(panic));
-                $error_val
-            }
+            Ok(result) => result,          // *mut c_char：NULL 成功，非 NULL 错误
+            Err(panic) => panic_to_error(panic), // panic 也转成分配的 error string
         }
-    }};
+    };
 }
 ```
 
-此模式直接借鉴自 `zsh-native-syntax` 项目。
+fork guard 也遵循同一约定，在子进程中直接 `return error_string(...)`。
 
 ### 2.3 内存管理约定
 
-| 函数                              | 分配者                      | 释放者                   |
-| --------------------------------- | --------------------------- | ------------------------ |
+| 返回值 / 参数                  | 分配者                      | 释放者                   |
+| ------------------------------ | --------------------------- | ------------------------ |
+| 可失败调用的返回值（错误串）   | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
 | `ssp_session_render` → `out` | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
-| `ssp_version` 返回值            | 静态`LazyLock<CString>`   | 不可释放                 |
-| `ssp_last_error` 返回值         | 线程局部`CString`         | 不可释放，下次调用覆盖   |
+| `ssp_session_create` → `out` | 库内部`Box<SessionHandle>` | `ssp_session_destroy()` |
+| `ssp_version` 返回值           | 静态字符串字面量            | 不可释放                 |
 
-简单的规则：只有 `ssp_session_render` 的输出需要 `ssp_free`。
+`ssp_free()` 本身不可能失败，因此保持 `void` 返回；`ssp_version()` 返回静态字符串，
+两者不参与 `char *` 错误协议。
+
+错误获取方式就是读取函数返回值：
+
+```c
+char *err = ssp_session_render(session, &in, &prompt);
+if (err) {
+    fprintf(stderr, "%s\n", err);
+    ssp_free(err);
+}
+```
 
 ### 2.4 Rayon 线程池的一次性初始化
 
@@ -414,16 +431,15 @@ pub struct SessionHandle {
 }
 
 macro_rules! guard_fork {
-    ($handle:expr, $error_val:expr) => {
-        if { &*$handle }.creator_pid != std::process::id() {
-            set_error("refusing call in forked child process");
-            return $error_val;
+    ($handle:expr) => {
+        if unsafe { &*$handle }.creator_pid != std::process::id() {
+            return error_string("refusing call in forked child process");
         }
     };
 }
 ```
 
-fork 子进程中的 FFI 调用返回安全默认值（渲染返回空、错误码非零），不触碰运行时。
+fork 子进程中的 FFI 调用返回非 `NULL` 错误串（`out` 保持为空），不触碰运行时。
 
 pwsh/.NET 使用 `fork()+execve()`（立即 exec，中间无 managed 代码运行），**无需 guard**。
 
@@ -454,18 +470,34 @@ pub fn shutdown(&self) {
 zsh 卸载链：`zmodload -u` → `cleanup_()` → `ssp_session_shutdown()` →
 `shutdown()`（发信号+等待）→ `ssp_session_destroy()` → `dlclose` 安全。
 
-### 9.3 避免 TLS 析构器悬挂
+### 9.3 错误记录：直接随返回值返回
 
 最初用 `thread_local!` 记录 last error。风险：TLS 首次在宿主线程
 （zsh/pwsh 主线程）访问时注册析构器，`dlclose` 后析构器指针悬挂。
 glibc 跳过已卸载 DSO 的析构器，但 **macOS 和 Windows 没有保护**。
 
-**解决方案**：改用全局 `Mutex<Option<CString>>`——无每线程状态，
-无析构器注册，卸载安全。FFI 调用被 shell 单线程串行化，无争用：
+之后考虑过“全局错误槽”和“每个 session 一个错误槽”，但两者都引入了调用方
+“稍后再查询”的窗口；在窗口内其他调用可能覆盖槽内容。
+
+**最终方案**：彻底取消错误槽。可失败函数直接返回 `char *`：
+
+- `NULL`：成功；
+- 非 `NULL`：本次调用的错误字符串，调用方用 `ssp_free()` 释放。
 
 ```rust
-static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
+macro_rules! ffi_guard_error {
+    ($expr:expr) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $expr)) {
+            Ok(result) => result,
+            Err(panic) => panic_to_error(panic),
+        }
+    };
+}
 ```
+
+这样错误就是本次调用的返回值，不需要加锁，不需要 TLS，也不会在 `dlclose` 后留下
+悬挂析构器；不同 session / 线程之间更没有可互相覆盖的共享状态。`ssp_free()` 是唯一
+不返回错误串的导出函数（它本身不可能失败），`ssp_version()` 返回静态字符串。
 
 ## 10. Fork/Unload 回归测试
 

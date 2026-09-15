@@ -94,10 +94,9 @@ static void set_str_param(const char *name, char *val) {
   setsparam((char *)name, ztrdup_metafy(val));
 }
 
-/* Report an FFI failure using the Rust-side last-error string. */
-static void report_ffi_error(const char *operation) {
-  char *err = NULL;
-  ssp_last_error(&err);
+/* Report an FFI failure. `err` is the error string returned by a fallible
+ * ssp_* call; ownership is consumed here. */
+static void report_ffi_error(char *err, const char *operation) {
   zwarnnam(MODNAME, "%s: %s", operation, err ? err : "unknown error");
   if (err)
     ssp_free(err);
@@ -172,17 +171,17 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
   /* Prompt target: 0 = Main, 1 = Right, 2 = Continuation */
   for (int i = 0; i < 3; i++) {
     char *out = NULL;
-    int ret = 0;
+    char *err = NULL;
 
     input.target = i;
-    ret = ssp_session_render(g_session, &input, &out);
-    if (ret == 0) {
-      if (out) {
-        set_str_param(param_names[i], out);
-        ssp_free(out);
-      }
-    } else {
-      report_ffi_error(BUILTIN_STARSHIP_PROMPT);
+    err = ssp_session_render(g_session, &input, &out);
+    if (err) {
+      report_ffi_error(err, BUILTIN_STARSHIP_PROMPT);
+      continue;
+    }
+    if (out) {
+      set_str_param(param_names[i], out);
+      ssp_free(out);
     }
   }
 
@@ -252,8 +251,9 @@ static int bin_ssp_stats(UNUSED(char *name), char **argv, UNUSED(Options ops),
 
   ssp_stats_t st;
   memset(&st, 0, sizeof(st));
-  if (ssp_session_stats(g_session, &st) != 0) {
-    report_ffi_error(BUILTIN_STARSHIP_STATS);
+  char *err = ssp_session_stats(g_session, &st);
+  if (err) {
+    report_ffi_error(err, BUILTIN_STARSHIP_STATS);
     return 1;
   }
 
@@ -338,15 +338,14 @@ int enables_(Module m, int **enables) {
 /**/
 int boot_(UNUSED(Module m)) {
   /* Create the persistent FFI session */
-  g_session = ssp_session_create();
+  char *err = ssp_session_create(&g_session);
+  if (err) {
+    zwarnnam(MODNAME, "failed to create session: %s", err);
+    ssp_free(err);
+    return 1;
+  }
   if (!g_session) {
-    char *err = NULL;
-    ssp_last_error(&err);
-    zwarnnam(MODNAME, "failed to create session: %s",
-             err ? err : "unknown error");
-    if (err) {
-      ssp_free(err);
-    }
+    zwarnnam(MODNAME, "failed to create session: unknown error");
     return 1;
   }
   return 0;
@@ -356,7 +355,11 @@ int boot_(UNUSED(Module m)) {
 int cleanup_(Module m) {
   /* Shut down the thread pool before freeing the session */
   if (g_session) {
-    ssp_session_destroy(g_session);
+    char *err = ssp_session_destroy(g_session);
+    if (err) {
+      zwarnnam(MODNAME, "failed to destroy session: %s", err);
+      ssp_free(err);
+    }
     g_session = NULL;
   }
 
