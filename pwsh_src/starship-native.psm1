@@ -47,7 +47,7 @@ if (-not $env:STARSHIP_FFI_PATH) {
 
 # ---- Native session (created once, lives for the pwsh process) ---------------
 $script:__NativeWarned = $false
-[ZoxideNative.Session]::Initialize()
+[StarshipNative.Session]::Initialize()
 
 # ---- Public metadata helpers -------------------------------------------------
 
