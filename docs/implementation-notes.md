@@ -86,7 +86,7 @@ Rust 2024 edition 中 `#[no_mangle]` 被标记为 unsafe 属性，必须写作�
 
 ```rust
 #[unsafe(no_mangle)]
-pub extern "C" fn ssp_session_create() -> *mut SessionHandle { ... }
+pub extern "C" fn ssp_init() -> *mut c_char { ... }
 ```
 
 ### 2.2 panic 隔离与错误返回
@@ -99,8 +99,8 @@ pub extern "C" fn ssp_session_create() -> *mut SessionHandle { ... }
 - `NULL` 表示成功；
 - 非 `NULL` 是库分配的、以 NUL 结尾的 UTF-8 错误字符串，调用方必须用 `ssp_free()` 释放。
 
-错误不存储在全局变量，也不存储在 session 中——它直接是本次调用的返回值。因此不存在
-“调用方还未来得及读取就被其他 session/线程覆盖”的竞态，也不需要 TLS 析构器。
+错误不存储在全局错误槽，也不存储在 session 中——它直接是本次调用的返回值。因此不存在
+“调用方还未来得及读取就被其他调用覆盖”的竞态，也不需要 TLS 析构器。
 
 ```rust
 macro_rules! ffi_guard_error {
@@ -120,8 +120,8 @@ fork guard 也遵循同一约定，在子进程中直接 `return error_string(..
 | 返回值 / 参数                  | 分配者                      | 释放者                   |
 | ------------------------------ | --------------------------- | ------------------------ |
 | 可失败调用的返回值（错误串）   | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
-| `ssp_session_render` → `out` | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
-| `ssp_session_create` → `out` | 库内部`Box<SessionHandle>` | `ssp_session_destroy()` |
+| `ssp_render` → `out` | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
+| 全局 session                    | 库内部`Mutex<Option<Session>>` | `ssp_shutdown()` |
 | `ssp_version` 返回值           | 静态字符串字面量            | 不可释放                 |
 
 `ssp_free()` 本身不可能失败，因此保持 `void` 返回；`ssp_version()` 返回静态字符串，
@@ -130,18 +130,22 @@ fork guard 也遵循同一约定，在子进程中直接 `return error_string(..
 错误获取方式就是读取函数返回值：
 
 ```c
-char *err = ssp_session_render(session, &in, &prompt);
+char *err = ssp_render(&in, &prompt);
 if (err) {
     fprintf(stderr, "%s\n", err);
     ssp_free(err);
 }
 ```
 
-### 2.4 Rayon 线程池的一次性初始化
+### 2.4 Rayon 线程池与 session 生命周期
 
-Starship 使用 rayon 并行渲染模块。`rayon::ThreadPoolBuilder::build_global()`
-在整个进程中只能成功调用一次。`ssp_session_create` 中调用时忽略 `AlreadyInitialized` 错误，
-确保在 shell 进程生命周期内多次创建/销毁 Session 都不会 panic。
+FFI 使用 `starship::session::Session::new()` 创建 scoped rayon pool，并放在全局
+`Mutex<Option<Session>>` 中。`ssp_shutdown()` 会取走并 drop 该 session，
+触发 `Session::drop` 的 pool 终止逻辑；随后再次 `ssp_init()` 会构建全新的
+pool、`SessionState`、缓存和统计。
+
+因此 destroy→create 是受支持路径，且不会复用旧 session 的任何状态。zsh 的
+`zmodload -u` 与 pwsh 的模块卸载都通过显式 destroy/shutdown 保证在 dlclose 前停止线程。
 
 ## 3. zsh 模块
 
@@ -352,14 +356,14 @@ macOS 使用 `-undefined dynamic_lookup` 达到同等效果。
 - PowerShell 的 `prompt` 函数机制与 zsh 不同：pwsh 在每次显示 prompt 时调用 `prompt` 函数，
   支持通过 `$function:prompt` 覆盖
 
-## 8. 统计系统 (SessionStatsStatus)
+## 8. 统计系统 (StatsStatus)
 
 ### 8.1 原子计数器
 
-统计字段使用 `std::sync::atomic::AtomicU64` 而非 `Mutex<SessionStats>`：
+统计字段使用 `std::sync::atomic::AtomicU64` 而非 `Mutex<Stats>`：
 
 ```rust
-pub struct SessionStatsStatus {
+pub struct StatsStatus {
     pub config_hits:          atomic::AtomicU64,
     pub config_misses:        atomic::AtomicU64,
     pub repo_status_hits:     atomic::AtomicU64,
@@ -377,11 +381,11 @@ pub struct SessionStatsStatus {
 ```
 
 每个缓存操作直接 `fetch_add(1, Ordering::Relaxed)` 递增对应的原子计数器，
-无需获取 Mutex 锁。对外通过 `SessionStats`（普通 struct）导出快照。
+无需获取 Mutex 锁。对外通过 `Stats`（普通 struct）导出快照。
 
 ### 8.2 zsh 集成
 
-`starship_stats` builtin 调用 `ssp_session_stats()` 获取快照，
+`starship_stats` builtin 调用 `ssp_stats()` 获取快照，
 设置 `STARSHIP_STATS_*` 整数参数并支持 `-v`（详细）和 `-q`（静默）选项：
 
 ```zsh
@@ -402,7 +406,7 @@ $ echo $STARSHIP_STATS_RENDERS
 ### 8.3 FFI 层
 
 `ssp_stats_t` 结构体在 `ffi.h` 中定义，包含 13 个 `unsigned long long` 字段。
-`ssp_session_stats()` 从 `SessionStatsStatus` 中原子读取每个字段，组装为 C struct 返回。
+`ssp_stats()` 从 `StatsStatus` 中原子读取每个字段，组装为 C struct 返回。
 
 ## 9. 进程安全机制
 
@@ -422,24 +426,25 @@ zsh 在以下场景会 `fork()` 且**不 exec**——子进程是父进程的字
 | `starship_prompt > file` | —          | ❌ 不 fork          |
 | `cat \| starship_prompt`  | —          | ❌ 不 fork（末位）  |
 
-**解决方案**：`SessionHandle` 记录创建时的 PID，每个 FFI 入口比对：
+**解决方案**：全局 session 额外记录创建进程 PID（放在 `AtomicU32` 中，避免 fork
+子进程先触碰可能被继承的 Mutex）：
 
 ```rust
-pub struct SessionHandle {
-    session: Session,
-    creator_pid: u32,   // getpid() at session_create time
-}
+static SESSION: Mutex<Option<starship::session::Session>> = Mutex::new(None);
+static SESSION_PID: AtomicU32 = AtomicU32::new(0);
 
 macro_rules! guard_fork {
-    ($handle:expr) => {
-        if unsafe { &*$handle }.creator_pid != std::process::id() {
+    () => {
+        let recorded_pid = SESSION_PID.load(Ordering::Relaxed);
+        if recorded_pid != 0 && recorded_pid != std::process::id() {
             return error_string("refusing call in forked child process");
         }
     };
 }
 ```
 
-fork 子进程中的 FFI 调用返回非 `NULL` 错误串（`out` 保持为空），不触碰运行时。
+fork 子进程中的 FFI 调用返回非 `NULL` 错误串（`out` 保持为空），不触碰全局
+Mutex、session 或 rayon。
 
 pwsh/.NET 使用 `fork()+execve()`（立即 exec，中间无 managed 代码运行），**无需 guard**。
 
@@ -448,27 +453,29 @@ pwsh/.NET 使用 `fork()+execve()`（立即 exec，中间无 managed 代码运�
 **rayon 全局池无法关闭**——`build_global()` 创建的线程在进程生命周期内
 永远存在，`dlclose` 后它们返回时访问已卸载代码 → SIGSEGV。
 
-**解决方案**：改用 scoped `rayon::ThreadPool`，存储在 `SessionState` 中，
+**解决方案**：使用 scoped `rayon::ThreadPool`，存储在 `Session` 中，
 渲染时用 `pool.install()` 包裹：
 
 ```rust
-pub struct SessionState {
-    rayon_pool: Mutex<Option<rayon::ThreadPool>>,  // Option 允许 take()
+pub struct Session {
+    rayon_pool: parking_lot::Mutex<Option<rayon::ThreadPool>>,
+    state: Arc<SessionState>,
 }
 
-pub fn shutdown(&self) {
-    if let Some(pool) = self.state.rayon_pool.lock().take() {
-        drop(pool);  // 发送 terminate 信号（rayon Drop 不阻塞！）
-        std::thread::sleep(Duration::from_millis(100));  // 等待 worker 退出
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Some(pool) = self.rayon_pool.lock().take() {
+            drop(pool); // 发送 terminate 信号（rayon Drop 不阻塞！）
+            std::thread::sleep(Duration::from_millis(100)); // 等待 worker 退出
+        }
     }
 }
 ```
 
-关键发现：`ThreadPool::drop()` **只发信号不等待**（源码验证 rayon-core
-1.13.0 `registry.rs:595`），因此显式 sleep 覆盖 worker 退出的竞态窗口。
+`ssp_shutdown()` 取走全局 `Option<Session>` 并 drop，因此 destroy→create
+时旧 pool 已终止，新 create 会构建新 pool。
 
-zsh 卸载链：`zmodload -u` → `cleanup_()` → `ssp_session_shutdown()` →
-`shutdown()`（发信号+等待）→ `ssp_session_destroy()` → `dlclose` 安全。
+zsh 卸载链：`zmodload -u` → `cleanup_()` → `ssp_shutdown()` → `dlclose` 安全。
 
 ### 9.3 错误记录：直接随返回值返回
 
@@ -495,9 +502,29 @@ macro_rules! ffi_guard_error {
 }
 ```
 
-这样错误就是本次调用的返回值，不需要加锁，不需要 TLS，也不会在 `dlclose` 后留下
-悬挂析构器；不同 session / 线程之间更没有可互相覆盖的共享状态。`ssp_free()` 是唯一
+这样错误就是本次调用的返回值，不需要错误槽，不需要 TLS，也不会在 `dlclose` 后留下
+悬挂析构器；不同调用之间更没有可互相覆盖的共享状态。`ssp_free()` 是唯一
 不返回错误串的导出函数（它本身不可能失败），`ssp_version()` 返回静态字符串。
+
+### 9.4 全局单 session 与 starship 静态变量审计
+
+改为全局单 session 后，destroy→create 会创建全新的 `SessionState` 和 scoped rayon pool，
+但 starship 源码中存在若干进程级静态状态。审计结论如下：
+
+| 位置 | 状态 | 对 destroy→create 的影响 | 结论 |
+| --- | --- | --- | --- |
+| `context/mod.rs` `get_shell()` 内 `static SHELL: OnceLock<Shell>` | 缓存 `STARSHIP_SHELL` | 首次 render 后不再读取环境变量 | 单进程单 shell 模型下无问题；若同一进程内 destroy→create 后要切换 shell 类型，必须卸载/重载 dylib。记录为已知限制 |
+| `modules/git_status.rs` `static REPO_STATUS` | 默认路径的全局 repo status 缓存 | `in-process` 且 `context.session = Some` 时完全绕过 | FFI 始终传 session，因此该静态不会跨 session 泄漏 |
+| `print.rs` `static ANSI_REGEX: OnceLock<Regex>` | 固定正则缓存 | 无 session 数据 | 无影响 |
+| `logger.rs` 的全局 logger | 日志文件句柄 | FFI 库不调用 `logger::init()` | 无影响 |
+| `context/mod.rs` 的 `dir_contents` / `git_repo` `OnceLock` | 每次 `Context` 新建 | 无影响 | 缓存跨 render 由 `SessionState` 承载 |
+| `modules/gcloud.rs`、`modules/rust.rs`、`modules/aws.rs` 中的 `OnceLock`/`OnceCell` | 每次 render 局部结构 | 无影响 | 不跨 session |
+| `formatter/version.rs`、各 module 的 `LazyLock` | 函数内局部或常量 | 无影响 | 无状态或每次重建 |
+
+因此：
+- destroy→create 会得到空缓存和归零的统计，功能正确。
+- 唯一需要记录的边界是 `STARSHIP_SHELL` 的进程级缓存；目标环境（一个 shell 进程只服务一种 shell）不受影响。
+- 不需要为本次改造修改 `starship` 源码。
 
 ## 10. Fork/Unload 回归测试
 

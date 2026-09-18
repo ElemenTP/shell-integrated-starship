@@ -65,20 +65,18 @@ internal static unsafe partial class NativeMethods
     // ── Session lifecycle ──────────────────────────────────────────────
 
     /// <summary>
-    /// Create a new prompt rendering session. Returns <see cref="IntPtr.Zero"/>
-    /// on success or an allocated error string; on failure
-    /// <paramref name="session"/> is set to <see cref="IntPtr.Zero"/>.
+    /// Create the process-wide prompt rendering session. Returns
+    /// <see cref="IntPtr.Zero"/> on success or an allocated error string.
     /// </summary>
-    [LibraryImport(LibName, EntryPoint = "ssp_session_create")]
-    internal static partial IntPtr SessionCreate(out IntPtr session);
+    [LibraryImport(LibName, EntryPoint = "ssp_init")]
+    internal static partial IntPtr Init();
 
     /// <summary>
-    /// Destroy a session. Passing <see cref="IntPtr.Zero"/> is a successful
-    /// no-op. Returns <see cref="IntPtr.Zero"/> on success or an allocated
-    /// error string.
+    /// Destroy the process-wide session. Returns <see cref="IntPtr.Zero"/> on
+    /// success (including when no session exists) or an allocated error string.
     /// </summary>
-    [LibraryImport(LibName, EntryPoint = "ssp_session_destroy")]
-    internal static partial IntPtr SessionDestroy(IntPtr session);
+    [LibraryImport(LibName, EntryPoint = "ssp_shutdown")]
+    internal static partial IntPtr Shutdown();
 
     // ── Prompt rendering ────────────────────────────────────────────────
 
@@ -89,9 +87,9 @@ internal static unsafe partial class NativeMethods
     /// returns an allocated error string and sets <paramref name="output"/> to
     /// <see cref="IntPtr.Zero"/>.
     /// </summary>
-    [LibraryImport(LibName, EntryPoint = "ssp_session_render")]
-    internal static partial IntPtr SessionRender(
-        IntPtr session, IntPtr input, out IntPtr output);
+    [LibraryImport(LibName, EntryPoint = "ssp_render")]
+    internal static partial IntPtr Render(
+        IntPtr input, out IntPtr output);
 
     /// <summary>
     /// Free a string returned by any fallible ssp_* call. NULL-safe. This
@@ -117,13 +115,12 @@ internal static unsafe partial class NativeMethods
     /// on success and writes the snapshot to <paramref name="stats"/>; on
     /// failure returns an allocated error string.
     /// </summary>
-    [LibraryImport(LibName, EntryPoint = "ssp_session_stats")]
-    internal static partial IntPtr SessionStats(
-        IntPtr session, out SspStats stats);
+    [LibraryImport(LibName, EntryPoint = "ssp_stats")]
+    internal static partial IntPtr Stats(out SspStats stats);
 }
 
 /// <summary>
-/// C-compatible input struct for ssp_session_render.
+/// C-compatible input struct for ssp_render.
 /// Must exactly match the Rust ssp_render_input layout.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -143,7 +140,7 @@ internal struct SspRenderInput
 }
 
 /// <summary>
-/// C-compatible stats struct for ssp_session_stats.
+/// C-compatible stats struct for ssp_stats.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct SspStats

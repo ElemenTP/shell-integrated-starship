@@ -3,7 +3,7 @@
 #
 # Verifies that repeated zmodload -u / zmodload cycles do not crash,
 # leak threads, or leave corrupted state. Each cycle exercises the
-# thread-pool shutdown path (cleanup_ → ssp_session_shutdown).
+# destroy→create path (cleanup_ → ssp_shutdown, boot_ → ssp_init).
 #
 # Usage:
 #   MODULE_DIR=/path/to/zsh_src/build zsh test_unload_zsh.sh

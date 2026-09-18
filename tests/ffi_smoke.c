@@ -5,6 +5,9 @@
  * NULL means success; a non-NULL value is an error string the caller frees
  * with ssp_free().
  *
+ * The library owns exactly one global session per process. The test covers
+ * create/destroy/render/stats, repeated initialization, and destroy→create.
+ *
  * Build:
  *   gcc -O2 -o ffi_smoke ffi_smoke.c -ldl
  *
@@ -16,8 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-typedef struct ssp_session ssp_session_t;
 
 typedef struct {
   const char *status;
@@ -45,13 +46,12 @@ typedef struct {
 
 /* Function pointers loaded via dlopen */
 static void *lib_handle = NULL;
-static char *(*fn_session_create)(ssp_session_t **out);
-static char *(*fn_session_destroy)(ssp_session_t *);
-static char *(*fn_session_render)(ssp_session_t *, const ssp_render_input_t *,
-                                  char **);
+static char *(*fn_init)(void);
+static char *(*fn_shutdown)(void);
+static char *(*fn_render)(const ssp_render_input_t *, char **);
 static void (*fn_free)(char *);
 static const char *(*fn_version)(void);
-static char *(*fn_session_stats)(ssp_session_t *, ssp_stats_t *);
+static char *(*fn_stats)(ssp_stats_t *);
 
 static int passed = 0, failed = 0;
 
@@ -79,26 +79,19 @@ static int load_library(const char *path) {
     fprintf(stderr, "dlsym(ssp_%s): %s\n", #sym, dlerror());                   \
     return -1;                                                                 \
   }
-  L(session_create);
-  L(session_destroy);
-  L(session_render);
+  L(init);
+  L(shutdown);
+  L(render);
   L(free);
   L(version);
-  L(session_stats);
+  L(stats);
 #undef L
   return 0;
 }
 
-/* Create a session, aborting the current test on failure. */
-static ssp_session_t *make_session(void) {
-  ssp_session_t *session = NULL;
-  char *err = fn_session_create(&session);
-  if (err) {
-    fprintf(stderr, "session_create: %s\n", err);
-    fn_free(err);
-    return NULL;
-  }
-  return session;
+static void fail_with_error(const char *what, char *err) {
+  fprintf(stderr, "  %s: %s\n", what, err ? err : "unknown error");
+  fn_free(err);
 }
 
 int main(int argc, char **argv) {
@@ -118,132 +111,221 @@ int main(int argc, char **argv) {
       FAIL("bad version");
   }
 
-  /* Test: create/destroy */
-  TEST("create/destroy");
+  /* Test: no session yet */
+  TEST("render before create (error expected)");
   {
-    ssp_session_t *s = make_session();
-    if (s) {
-      char *err = fn_session_destroy(s);
-      if (err) {
-        FAIL(err);
-        fn_free(err);
-      } else {
-        PASS();
-      }
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 0;
+    char *out = NULL;
+    char *err = fn_render(&in, &out);
+    if (err && !out) {
+      fn_free(err);
+      PASS();
     } else {
-      FAIL("create returned NULL");
+      fail_with_error("expected error", err);
+      fn_free(out);
+      FAIL("render without session should error");
     }
   }
 
-  /* Test: destroy(NULL) */
-  TEST("destroy(NULL)");
+  /* Test: create */
+  TEST("create");
   {
-    char *err = fn_session_destroy(NULL);
-    if (err) {
-      FAIL(err);
-      fn_free(err);
-    } else {
+    char *err = fn_init();
+    if (!err)
       PASS();
+    else {
+      fail_with_error("session_create", err);
+      FAIL("create failed");
     }
+  }
+
+  /* Test: duplicate create is no-op */
+  TEST("create twice (no error expected)");
+  {
+    char *err = fn_init();
+    if (err)
+      FAIL("second create should not return an error");
+    else
+      PASS();
   }
 
   /* Test: render main prompt */
   TEST("render main prompt");
   {
-    ssp_session_t *s = make_session();
-    if (!s) {
-      FAIL("create returned NULL");
-    } else {
-      ssp_render_input_t in = {0};
-      in.terminal_width = 80;
-      in.target = 0;
-      char *out = NULL;
-      char *err = fn_session_render(s, &in, &out);
-      if (!err && out && strlen(out) > 0) {
-        PASS();
-      } else {
-        FAIL(err ? err : "render returned no output");
-      }
-      if (err)
-        fn_free(err);
-      fn_free(out);
-      fn_session_destroy(s);
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 0;
+    char *out = NULL;
+    char *err = fn_render(&in, &out);
+    if (!err && out && strlen(out) > 0)
+      PASS();
+    else {
+      fail_with_error("render main", err);
+      FAIL("render failed");
     }
+    fn_free(out);
   }
 
   /* Test: render right prompt */
   TEST("render right prompt");
   {
-    ssp_session_t *s = make_session();
-    if (!s) {
-      FAIL("create returned NULL");
-    } else {
-      ssp_render_input_t in = {0};
-      in.terminal_width = 80;
-      in.target = 1;
-      char *out = NULL;
-      char *err = fn_session_render(s, &in, &out);
-      if (!err)
-        PASS();
-      else
-        FAIL(err);
-      if (err)
-        fn_free(err);
-      fn_free(out);
-      fn_session_destroy(s);
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 1;
+    char *out = NULL;
+    char *err = fn_render(&in, &out);
+    if (!err)
+      PASS();
+    else {
+      fail_with_error("render right", err);
+      FAIL("right render failed");
     }
+    fn_free(out);
   }
 
-  /* Test: render null args returns an allocated error string */
+  /* Test: render null args */
   TEST("render null args (error expected)");
   {
     char *out = NULL;
-    char *err = fn_session_render(NULL, NULL, &out);
-    if (err && !out)
+    char *err = fn_render(NULL, &out);
+    if (err && !out) {
+      fn_free(err);
       PASS();
-    else
-      FAIL("expected an error and cleared *out");
-    fn_free(err);
+    } else {
+      fail_with_error("expected error", err);
+      fn_free(out);
+      FAIL("null input should error");
+    }
   }
 
-  /* Test: errors are call-local, not stored anywhere */
-  TEST("errors are call-local");
+  /* Test: render null out-slot */
+  TEST("render null out-slot (error expected)");
   {
-    ssp_session_t *a = make_session();
-    ssp_session_t *b = make_session();
-    if (!a || !b) {
-      FAIL("create returned NULL");
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 0;
+    char *err = fn_render(&in, NULL);
+    if (err) {
+      fn_free(err);
+      PASS();
     } else {
-      ssp_render_input_t in = {0};
-      in.terminal_width = 80;
-      in.target = 0;
-
-      char *out = NULL;
-      char *err_a = fn_session_render(a, NULL, &out);
-      int ok = (err_a != NULL) && (out == NULL);
-      fn_free(err_a);
-
-      char *out_b = NULL;
-      char *err_b = fn_session_render(b, &in, &out_b);
-      ok = ok && (err_b == NULL) && (out_b != NULL);
-      fn_free(err_b);
-      fn_free(out_b);
-
-      char *out_a = NULL;
-      char *err_a2 = fn_session_render(a, &in, &out_a);
-      ok = ok && (err_a2 == NULL) && (out_a != NULL);
-      fn_free(err_a2);
-      fn_free(out_a);
-
-      if (ok)
-        PASS();
-      else
-        FAIL("error handling is not call-local");
+      FAIL("null out should error");
     }
-    if (a)
-      fn_session_destroy(a);
-    if (b)
-      fn_session_destroy(b);
+  }
+
+  /* Test: stats */
+  TEST("stats");
+  {
+    ssp_stats_t st = {0};
+    char *err = fn_stats(&st);
+    if (!err && st.renders > 0)
+      PASS();
+    else {
+      fail_with_error("stats", err);
+      FAIL("stats failed");
+    }
+  }
+
+  /* Test: cache hit across renders */
+  TEST("cache hit across renders");
+  {
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 0;
+    char *o1 = NULL, *o2 = NULL;
+    char *err1 = fn_render(&in, &o1);
+    char *err2 = fn_render(&in, &o2);
+    if (!err1 && !err2 && o1 && o2 && strcmp(o1, o2) == 0)
+      PASS();
+    else {
+      fail_with_error("first render", err1);
+      fail_with_error("second render", err2);
+      FAIL("outputs differ or render failed");
+    }
+    fn_free(o1);
+    fn_free(o2);
+  }
+
+  /* Test: destroy */
+  TEST("destroy");
+  {
+    char *err = fn_shutdown();
+    if (!err)
+      PASS();
+    else {
+      fail_with_error("shutdown", err);
+      FAIL("destroy failed");
+    }
+  }
+
+  /* Test: destroy is idempotent */
+  TEST("destroy twice");
+  {
+    char *err = fn_shutdown();
+    if (!err)
+      PASS();
+    else {
+      fail_with_error("shutdown", err);
+      FAIL("second destroy should succeed");
+    }
+  }
+
+  /* Test: render after destroy fails */
+  TEST("render after destroy (error expected)");
+  {
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 0;
+    char *out = NULL;
+    char *err = fn_render(&in, &out);
+    if (err && !out) {
+      fn_free(err);
+      PASS();
+    } else {
+      fail_with_error("expected error", err);
+      fn_free(out);
+      FAIL("render after destroy should error");
+    }
+  }
+
+  /* Test: destroy then create yields a fresh session */
+  TEST("destroy then create resets stats");
+  {
+    char *err = fn_init();
+    if (err) {
+      fail_with_error("session_create", err);
+      FAIL("recreate failed");
+    } else {
+      ssp_stats_t st = {0};
+      err = fn_stats(&st);
+      if (err) {
+        fail_with_error("stats", err);
+        FAIL("stats after recreate failed");
+      } else if (st.renders != 0) {
+        FAIL("new session should start with zero renders");
+      } else {
+        PASS();
+      }
+    }
+  }
+
+  /* Test: render after recreate */
+  TEST("render after recreate");
+  {
+    ssp_render_input_t in = {0};
+    in.terminal_width = 80;
+    in.target = 0;
+    char *out = NULL;
+    char *err = fn_render(&in, &out);
+    if (!err && out && strlen(out) > 0)
+      PASS();
+    else {
+      fail_with_error("render after recreate", err);
+      FAIL("render after recreate failed");
+    }
+    fn_free(out);
   }
 
   /* Test: free(NULL) */
@@ -253,56 +335,8 @@ int main(int argc, char **argv) {
     PASS();
   }
 
-  /* Test: stats */
-  TEST("stats");
-  {
-    ssp_session_t *s = make_session();
-    if (!s) {
-      FAIL("create returned NULL");
-    } else {
-      ssp_render_input_t in = {0};
-      in.terminal_width = 80;
-      in.target = 0;
-      char *out = NULL;
-      char *err = fn_session_render(s, &in, &out);
-      fn_free(err);
-      fn_free(out);
-
-      ssp_stats_t st = {0};
-      err = fn_session_stats(s, &st);
-      if (!err && st.renders > 0)
-        PASS();
-      else
-        FAIL(err ? err : "stats failed");
-      fn_free(err);
-      fn_session_destroy(s);
-    }
-  }
-
-  /* Test: cache hit */
-  TEST("cache hit across renders");
-  {
-    ssp_session_t *s = make_session();
-    if (!s) {
-      FAIL("create returned NULL");
-    } else {
-      ssp_render_input_t in = {0};
-      in.terminal_width = 80;
-      in.target = 0;
-      char *o1 = NULL, *o2 = NULL;
-      char *err1 = fn_session_render(s, &in, &o1);
-      char *err2 = fn_session_render(s, &in, &o2);
-      if (!err1 && !err2 && o1 && o2 && strcmp(o1, o2) == 0)
-        PASS();
-      else
-        FAIL("outputs differ or render failed");
-      fn_free(err1);
-      fn_free(err2);
-      fn_free(o1);
-      fn_free(o2);
-      fn_session_destroy(s);
-    }
-  }
+  /* Final cleanup */
+  fn_shutdown();
 
   printf("\nResults: %d passed, %d failed\n", passed, failed);
   dlclose(lib_handle);

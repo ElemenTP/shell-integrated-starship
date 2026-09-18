@@ -94,30 +94,36 @@ Starship 的 104 个模块实现均为纯函数 `fn(&Context) -> Option<Module>`
 
 ```c
 // 错误协议：可失败函数返回 char*，NULL 表示成功，非 NULL 为错误字符串（需 ssp_free）
-char *ssp_session_create(ssp_session_t **out);
-char *ssp_session_destroy(ssp_session_t *s);
-char *ssp_session_render(ssp_session_t *s, const ssp_render_input_t *in, char **out);
-char *ssp_session_stats(ssp_session_t *s, ssp_stats_t *out);
+// 全局单 session：每个 shell 进程一个 session，无 handle 参数
+char *ssp_init(void);
+char *ssp_shutdown(void);
+char *ssp_render(const ssp_render_input_t *in, char **out);
+char *ssp_stats(ssp_stats_t *out);
 
 // ssp_free 本身不会失败，保持 void；ssp_version 返回静态字符串，不参与错误协议
 void ssp_free(char *ptr);
 const char *ssp_version(void);
 ```
 
-`ssp_session_render` 的提示字符串写在 `*out`；`ssp_session_create` 的 handle 写在 `*out`；
-`ssp_session_stats` 的快照写在 `*out`。所有由库分配、返回给调用方的字符串（包括提示串和错误串）
-都必须通过 `ssp_free` 释放。
+`ssp_render` 的提示字符串写在 `*out`；`ssp_stats` 的快照写在 `*out`。
+所有由库分配、返回给调用方的字符串（包括提示串和错误串）都必须通过 `ssp_free` 释放。
 
 **错误获取约定**：错误不再存放在任何全局或 session 错误槽中。每次调用的返回值就是本次调用的
-结果：`NULL` 成功，非 `NULL` 为错误字符串；调用方直接读取并 `ssp_free` 即可，不存在跨 session
-覆盖或读取过期的竞态。
+结果：`NULL` 成功，非 `NULL` 为错误字符串；调用方直接读取并 `ssp_free` 即可。
+
+**生命周期**：`ssp_init()` 建立进程级唯一 session；`ssp_shutdown()` 丢弃它并
+停止 scoped rayon pool。destroy 之后可以再次 create，新 session 拥有全新的 `SessionState`、
+空缓存和归零的统计信息。重复 create 返回错误；无 session 时 destroy 为成功 no-op。
+
+**多进程**：每个 shell 进程加载自己的 dylib 副本，因此各自拥有独立 session，互不影响。
+同一进程内不支持多个 session。
 
 **进程安全机制**：
 
 | 机制                         | 目的                                                                            |
 | ---------------------------- | ------------------------------------------------------------------------------- |
-| Fork guard (`creator_pid`) | zsh 的`$()`、`&`、管道会 fork 不 exec 的子进程；FFI 检测 PID 变化并拒绝调用 |
-| Scoped rayon pool            | 替代全局池，`shutdown()` 可终止所有 worker 线程，dlclose 安全                 |
+| 全局 PID 记录                 | zsh 的`$()`、`&`、管道会 fork 不 exec 的子进程；FFI 检测 PID 变化并拒绝调用 |
+| Scoped rayon pool            | 替代全局池，destroy 时终止 worker 线程，dlclose 安全                          |
 | 错误即返回值                 | 可失败调用直接返回错误字符串，无全局/session 错误槽，无共享状态与 TLS 析构器 |
 
 ### 5. Shell 集成契约
@@ -127,14 +133,15 @@ const char *ssp_version(void);
 - 复用 stock `starship.zsh` 的 precmd/preexec 钩子
 - 三个 builtin：`starship_prompt`（渲染）、`starship_stats`（统计）、`starship_version`（版本）
 - `starship_prompt` 读取 zsh params → 调用 FFI 3 次 → 写入 `STARSHIP_PROMPT` / `STARSHIP_RPROMPT` / `STARSHIP_PROMPT2`
-- `starship_stats` 调用 `ssp_session_stats` → 写入 `STARSHIP_STATS_*` 参数 + 打印摘要
+- `starship_stats` 调用 `ssp_stats` → 写入 `STARSHIP_STATS_*` 参数 + 打印摘要
 - `PROMPT='$STARSHIP_PROMPT'` 使用参数展开，无 subshell
-- `zmodload -u` 时 `cleanup_()` 依次调用 `ssp_session_shutdown` + `ssp_session_destroy`
+- `zmodload -u` 时 `cleanup_()` 调用 `ssp_shutdown()`
 
 **pwsh**：
 
-- C# 托管封装 `Session` 包装 native `ssp_session_t`
+- C# 静态封装 `StarshipNative.Session` 包装全局 native session
 - `prompt` 函数提取 PowerShell 状态 → `Session.Render()` → 返回字符串
+- 模块卸载时 `OnRemove` 调用 `Session.Shutdown()`
 - 通过 `[LibraryImport]` (source-gen) 加载 native 库
 
 ## 目录结构

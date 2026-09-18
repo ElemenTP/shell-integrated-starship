@@ -4,11 +4,17 @@ using System.Text;
 namespace StarshipNative;
 
 /// <summary>
-/// Safe managed wrapper around the starship-ffi native session.
+/// Safe managed wrapper around the starship-ffi native library.
+///
+/// The native library owns exactly one session per shell process. This class
+/// exposes it as static methods; <see cref="Initialize"/> is idempotent and
+/// <see cref="Shutdown"/> releases the session (for example when the PowerShell
+/// module is removed). A later <see cref="Initialize"/> + <see cref="Render"/>
+/// creates a fresh native session.
 ///
 /// Usage:
-///   var session = new Session();
-///   string prompt = session.Render(
+///   Session.Initialize();
+///   string prompt = Session.Render(
 ///       status: "0",
 ///       duration: null,
 ///       jobs: 0,
@@ -16,29 +22,42 @@ namespace StarshipNative;
 ///       keymap: "viins",
 ///       target: 0  // Main
 ///   );
-///   session.Dispose();
+///   Session.Shutdown();
 ///
 /// Native failures are surfaced directly as the allocated error string
-/// returned by each FFI call; the wrapper frees it and includes its text in
+/// returned by each FFI call; this wrapper frees it and includes its text in
 /// the thrown exception.
 /// </summary>
-public sealed class Session : IDisposable
+public static class Session
 {
-    private IntPtr _handle;
-    private bool _disposed;
-
     /// <summary>
-    /// Create a new prompt rendering session.
+    /// Create the process-wide native session. Idempotent: calling this again
+    /// after a successful initialization is a no-op.
     /// </summary>
-    public Session()
+    public static void Initialize()
     {
-        IntPtr err = NativeMethods.SessionCreate(out _handle);
-        if (err != IntPtr.Zero)
+        IntPtr error = NativeMethods.Init();
+        if (error != IntPtr.Zero)
         {
             throw new InvalidOperationException(
-                $"Failed to create starship session: {TakeError(err)}");
+                $"Failed to initialize starship session: {TakeError(error)}");
         }
     }
+
+    /// <summary>
+    /// Release the process-wide native session. Idempotent; errors are
+    /// consumed because this is normally called during module teardown.
+    /// </summary>
+    public static void Shutdown()
+    {
+        IntPtr error = NativeMethods.Shutdown();
+        if (error != IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                $"Failed to shutdown starship session: {TakeError(error)}");
+        }
+    }
+
 
     /// <summary>
     /// Render a prompt for the given parameters.
@@ -54,7 +73,7 @@ public sealed class Session : IDisposable
     /// <param name="keymap">Current keymap, or null for "viins".</param>
     /// <param name="target">0=Main, 1=Right, 2=Continuation.</param>
     /// <returns>The rendered prompt string.</returns>
-    public string Render(
+    public static string Render(
         string? status = null,
         string?[]? pipestatus = null,
         string? duration = null,
@@ -66,8 +85,6 @@ public sealed class Session : IDisposable
         string? keymap = null,
         int target = 0)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
         // BuildInput allocates unmanaged memory for all strings. The returned
         // NativeInput owns every block and is freed in the finally below, so
         // nothing leaks even if the native call throws.
@@ -80,16 +97,16 @@ public sealed class Session : IDisposable
             try
             {
                 Marshal.StructureToPtr(input.Input, inputPtr, false);
-                IntPtr err = NativeMethods.SessionRender(_handle, inputPtr, out IntPtr output);
-                if (err != IntPtr.Zero)
+                IntPtr error = NativeMethods.Render(inputPtr, out IntPtr output);
+                if (error != IntPtr.Zero)
                 {
                     throw new InvalidOperationException(
-                        $"ssp_session_render failed: {TakeError(err)}");
+                        $"starship render failed: {TakeError(error)}");
                 }
                 if (output == IntPtr.Zero)
                 {
                     throw new InvalidOperationException(
-                        "ssp_session_render succeeded but returned no output");
+                        "starship render succeeded but returned no output");
                 }
 
                 try
@@ -122,35 +139,15 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
-    /// Convert an allocated native error string into a managed string and free
-    /// the native allocation.
-    /// </summary>
-    private static string TakeError(IntPtr err)
-    {
-        if (err == IntPtr.Zero)
-            return "unknown error";
-        try
-        {
-            return Marshal.PtrToStringUTF8(err) ?? "unknown error";
-        }
-        finally
-        {
-            NativeMethods.Free(err);
-        }
-    }
-
-    /// <summary>
     /// Get cache performance statistics as a human-readable string.
     /// </summary>
-    public string GetStatsReport()
+    public static string GetStatsReport()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        IntPtr err = NativeMethods.SessionStats(_handle, out var stats);
-        if (err != IntPtr.Zero)
+        IntPtr error = NativeMethods.Stats(out var stats);
+        if (error != IntPtr.Zero)
         {
             throw new InvalidOperationException(
-                $"ssp_session_stats failed: {TakeError(err)}");
+                $"starship stats failed: {TakeError(error)}");
         }
         return $"Renders: {stats.Renders}, " +
                $"Config: {stats.ConfigHits}h/{stats.ConfigMisses}m, " +
@@ -161,25 +158,24 @@ public sealed class Session : IDisposable
                $"BinaryPath: {stats.BinaryPathHits}h/{stats.BinaryPathMisses}m";
     }
 
-    public void Dispose()
-    {
-        if (!_disposed && _handle != IntPtr.Zero)
-        {
-            IntPtr err = NativeMethods.SessionDestroy(_handle);
-            if (err != IntPtr.Zero)
-            {
-                // Dispose must not throw; consume the native error so it does
-                // not leak.
-                TakeError(err);
-            }
-            _handle = IntPtr.Zero;
-        }
-        _disposed = true;
-    }
 
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Consume an error pointer returned by a native call: NULL means success
+    /// (returns null), otherwise the message is copied into a managed string
+    /// and the native allocation is released with zo_free.
+    /// </summary>
+    private static string? TakeError(IntPtr error)
+    {
+        if (error == IntPtr.Zero)
+            return null;
+        string? message = Marshal.PtrToStringUTF8(error);
+        NativeMethods.Free(error);
+        return message;
+    }
 
     private static NativeInput BuildInput(
         string? status,
@@ -225,7 +221,7 @@ public sealed class Session : IDisposable
     /// Owns the unmanaged memory backing an <see cref="SspRenderInput"/> and
     /// frees every block on <see cref="Dispose"/>. Strings are copied into
     /// unmanaged memory with <see cref="Marshal.AllocHGlobal"/>, so the native
-    /// call can read them without GC pinning — and there is no handle to leak.
+    /// call can read them without GC pinning and nothing leaks.
     /// </summary>
     private sealed class NativeInput : IDisposable
     {
@@ -269,5 +265,3 @@ public sealed class Session : IDisposable
         }
     }
 }
-
-// SspStats is defined in NativeMethods.cs (internal struct).

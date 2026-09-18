@@ -53,12 +53,6 @@ static struct features module_features = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Session state (created in boot_, destroyed in cleanup_)            */
-/* ------------------------------------------------------------------ */
-
-static ssp_session_t *g_session = NULL;
-
-/* ------------------------------------------------------------------ */
 /* Helper: read a zsh string param safely                              */
 /* ------------------------------------------------------------------ */
 
@@ -126,11 +120,6 @@ static void report_ffi_error(char *err, const char *operation) {
 static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
                           UNUSED(Options ops), UNUSED(int func)) {
 
-  if (!g_session) {
-    zwarnnam(MODNAME, "%s: session not initialized", BUILTIN_STARSHIP_PROMPT);
-    return 1;
-  }
-
   /* --- Read zsh params --- */
   const char *status_str = get_str_param("STARSHIP_CMD_STATUS");
   const char *duration_str = get_str_param("STARSHIP_DURATION");
@@ -174,7 +163,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
     char *err = NULL;
 
     input.target = i;
-    err = ssp_session_render(g_session, &input, &out);
+    err = ssp_render(&input, &out);
     if (err) {
       report_ffi_error(err, BUILTIN_STARSHIP_PROMPT);
       continue;
@@ -244,14 +233,9 @@ static int bin_ssp_stats(UNUSED(char *name), char **argv, UNUSED(Options ops),
     argv++;
   }
 
-  if (!g_session) {
-    zwarnnam(MODNAME, "%s: session not initialized", BUILTIN_STARSHIP_STATS);
-    return 1;
-  }
-
   ssp_stats_t st;
   memset(&st, 0, sizeof(st));
-  char *err = ssp_session_stats(g_session, &st);
+  char *err = ssp_stats(&st);
   if (err) {
     report_ffi_error(err, BUILTIN_STARSHIP_STATS);
     return 1;
@@ -337,15 +321,11 @@ int enables_(Module m, int **enables) {
 
 /**/
 int boot_(UNUSED(Module m)) {
-  /* Create the persistent FFI session */
-  char *err = ssp_session_create(&g_session);
+  /* Create the process-wide FFI session. */
+  char *err = ssp_init();
   if (err) {
     zwarnnam(MODNAME, "failed to create session: %s", err);
     ssp_free(err);
-    return 1;
-  }
-  if (!g_session) {
-    zwarnnam(MODNAME, "failed to create session: unknown error");
     return 1;
   }
   return 0;
@@ -353,14 +333,11 @@ int boot_(UNUSED(Module m)) {
 
 /**/
 int cleanup_(Module m) {
-  /* Shut down the thread pool before freeing the session */
-  if (g_session) {
-    char *err = ssp_session_destroy(g_session);
-    if (err) {
-      zwarnnam(MODNAME, "failed to destroy session: %s", err);
-      ssp_free(err);
-    }
-    g_session = NULL;
+  /* Stop the scoped rayon pool and drop the global session. */
+  char *err = ssp_shutdown();
+  if (err) {
+    zwarnnam(MODNAME, "failed to destroy session: %s", err);
+    ssp_free(err);
   }
 
   /* Disable all features before teardown */

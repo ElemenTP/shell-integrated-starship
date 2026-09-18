@@ -206,7 +206,7 @@ Import-Module /path/to/prefix/share/pwsh/modules/starship-native
 $env:PSModulePath += ":$HOME/.local/share/powershell/Modules"
 Import-Module starship-native
 
-# prompt 函数会自动替换；卸载模块时自动恢复原 prompt
+# prompt 函数会自动替换；卸载模块时自动恢复原 prompt 并 shutdown 全局 session
 
 # pwsh 环境变量需用 StarshipEnvironment 设置（保证原生库可见）：
 Set-StarshipEnv STARSHIP_NATIVE_TTL_MS 10000
@@ -241,7 +241,7 @@ Remove-StarshipEnv STARSHIP_NATIVE_NO_CACHE
 
 ## 缓存体系
 
-Session 在 shell 生命周期内持久化，以下 6 类状态自动缓存：
+全局 session 在 shell 进程生命周期内持久化，以下 6 类状态自动缓存；destroy 后再 create 会得到全新的空缓存：
 
 | 缓存                         | 内容                                                        | 失效策略                                           |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
@@ -282,9 +282,9 @@ cmake --build build --config Release --target test-pwsh
 
 | 机制                    | 问题                                                                                   | 方案                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **Fork guard**    | zsh 的`$()`、`&`、管道会 fork 不 exec 的子进程，继承损坏的 rayon 运行时 → SIGSEGV | Session 记录创建时 PID，FFI 入口检测并拒绝 fork 子进程调用                    |
-| **线程池清理**    | rayon 全局池无法关闭；dlclose 后线程访问已卸载代码                                     | 改用 scoped`ThreadPool`，`ssp_session_shutdown()` 发信号+等待 worker 退出 |
-| **错误即返回值** | `thread_local!` 会悬挂；全局/session 错误槽存在“读取前被覆盖”的窗口             | 可失败函数返回 `char*`：NULL 成功，非 NULL 错误串（调用方 `ssp_free`）        |
+| **全局 PID 记录** | zsh 的`$()`、`&`、管道会 fork 不 exec 的子进程，继承损坏的 rayon 运行时 → SIGSEGV | 全局记录创建时 PID，FFI 入口检测并拒绝 fork 子进程调用                          |
+| **线程池清理**    | rayon 全局池无法关闭；dlclose 后线程访问已卸载代码                                     | 使用 scoped`ThreadPool`，`ssp_shutdown()` 发信号+等待 worker 退出    |
+| **错误即返回值** | `thread_local!` 会悬挂；错误槽存在“读取前被覆盖”的窗口             | 可失败函数返回 `char*`：NULL 成功，非 NULL 错误串（调用方 `ssp_free`）        |
 
 详细分析见 `docs/implementation-notes.md` §9。
 

@@ -12,9 +12,6 @@
 extern "C" {
 #endif
 
-/* Opaque session handle. */
-typedef struct ssp_session ssp_session_t;
-
 /* Input parameters for a single prompt render. */
 typedef struct {
   const char *status;            /* NULL or status-code string (e.g. "0") */
@@ -49,26 +46,30 @@ typedef struct {
  *
  * There are no global or per-session error slots to read after a call;
  * the error is carried directly by the return value.
+ *
+ * There is exactly one global session per shell process. Create it once before
+ * rendering; destroy it during module unload. A later ssp_init()
+ * after ssp_shutdown() creates a fresh session with empty caches.
  */
 
-/* Create a session. On success writes the handle to *out and returns NULL.
- * On failure sets *out to NULL and returns an allocated error string. */
-char *ssp_session_create(ssp_session_t **out);
+/* Create the global session. Returns NULL on success, or an allocated error
+ * string if a session already exists or creation fails. */
+char *ssp_init(void);
 
-/* Destroy a session. NULL handle is a successful no-op. */
-char *ssp_session_destroy(ssp_session_t *s);
+/* Destroy the global session. Returns NULL on success, including when no
+ * session exists (idempotent). */
+char *ssp_shutdown(void);
 
 /* Render a prompt. On success writes the prompt to *out and returns NULL.
  * On failure sets *out to NULL and returns an allocated error string. */
-char *ssp_session_render(ssp_session_t *s, const ssp_render_input_t *in,
-                         char **out);
+char *ssp_render(const ssp_render_input_t *in, char **out);
 
-/* Retrieve session statistics. On success writes the snapshot to *out and
+/* Retrieve cache statistics. On success writes the snapshot to *out and
  * returns NULL, otherwise returns an allocated error string. */
-char *ssp_session_stats(ssp_session_t *s, ssp_stats_t *out);
+char *ssp_stats(ssp_stats_t *out);
 
 /* Free a string returned by any fallible ssp_* function, or a prompt string
- * returned by ssp_session_render. NULL is safe. This function cannot fail and
+ * returned by ssp_render. NULL is safe. This function cannot fail and
  * therefore returns void rather than an error string. */
 void ssp_free(char *ptr);
 

@@ -43,37 +43,56 @@ try {
     exit 1
 }
 
-# Create session and render
+# Initialize the process-wide session.
 try {
-    $session = New-Object StarshipNative.Session
-    Write-Host "PASS: session created"
+    [StarshipNative.Session]::Initialize()
+    Write-Host "PASS: session initialized"
+
+    # Initialize is idempotent.
+    [StarshipNative.Session]::Initialize()
+    Write-Host "PASS: second Initialize() is a no-op"
 
     # Render main prompt
-    $result = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 0)
+    $result = [StarshipNative.Session]::Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 0)
     if ($result.Length -gt 0) {
         Write-Host "PASS: prompt rendered ($($result.Length) chars)"
     } else {
         Write-Host "FAIL: empty prompt"
-        $session.Dispose()
+        [StarshipNative.Session]::Shutdown()
         exit 1
     }
 
     # Render right prompt
-    $rightResult = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 1)
+    $rightResult = [StarshipNative.Session]::Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 1)
     Write-Host "PASS: right prompt rendered ($($rightResult.Length) chars)"
 
     # Render continuation prompt
-    $rightResult = $session.Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 2)
+    $rightResult = [StarshipNative.Session]::Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 2)
     Write-Host "PASS: continuation prompt rendered ($($rightResult.Length) chars)"
 
     # Get stats
-    $stats = $session.GetStatsReport()
+    $stats = [StarshipNative.Session]::GetStatsReport()
     Write-Host "PASS: stats retrieved — $stats"
 
-    $session.Dispose()
-    Write-Host "PASS: session disposed"
+    # Shutdown and recreate: the same process must be able to start a fresh session.
+    [StarshipNative.Session]::Shutdown()
+    Write-Host "PASS: session shutdown"
+
+    [StarshipNative.Session]::Initialize()
+    $recreated = [StarshipNative.Session]::Render($null, $null, $null, 0, 0, 80, $null, $null, $null, 0)
+    if ($recreated.Length -gt 0) {
+        Write-Host "PASS: prompt rendered after recreate ($($recreated.Length) chars)"
+    } else {
+        Write-Host "FAIL: empty prompt after recreate"
+        [StarshipNative.Session]::Shutdown()
+        exit 1
+    }
+
+    [StarshipNative.Session]::Shutdown()
+    Write-Host "PASS: final session shutdown"
 } catch {
     Write-Host "FAIL: $_"
+    try { [StarshipNative.Session]::Shutdown() } catch {}
     exit 1
 }
 

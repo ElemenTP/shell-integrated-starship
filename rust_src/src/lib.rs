@@ -11,5 +11,9 @@
 //! Fallible exports return `char *`: NULL means success, and a non-NULL value
 //! is an allocated error string the caller must release with `ssp_free()`.
 //! There are no global or per-session error slots to read afterwards.
+//!
+//! The library owns exactly one global session per shell process.
+//! `ssp_init` establishes it; `ssp_shutdown` tears it down and
+//! a later `ssp_init` builds a fresh session with empty caches.
 
 pub mod ffi;

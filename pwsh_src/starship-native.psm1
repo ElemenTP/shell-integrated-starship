@@ -46,15 +46,8 @@ if (-not $env:STARSHIP_FFI_PATH) {
 [StarshipNative.StarshipEnvironment]::Set('STARSHIP_SHELL', 'pwsh')
 
 # ---- Native session (created once, lives for the pwsh process) ---------------
-$script:__Session = $null
 $script:__NativeWarned = $false
-
-function Get-Session {
-    if ($null -eq $script:__Session) {
-        $script:__Session = [StarshipNative.Session]::new()
-    }
-    return $script:__Session
-}
+[ZoxideNative.Session]::Initialize()
 
 # ---- Public metadata helpers -------------------------------------------------
 
@@ -71,7 +64,7 @@ function Get-StarshipNativeStats {
     .SYNOPSIS
         Returns cache performance statistics for the current session.
     #>
-    return (Get-Session).GetStatsReport()
+    return [StarshipNative.Session]::GetStatsReport()
 }
 
 # ---- The rest is adapted from starship/src/init/starship.ps1 -----------------
@@ -189,7 +182,6 @@ function global:prompt {
 
     # ---- Native: render prompt in-process ----
     try {
-        $session = Get-Session
         $promptText = if ($script:TransientPrompt) {
             $script:TransientPrompt = $false
             if (Test-Path function:Invoke-Starship-TransientFunction) {
@@ -198,7 +190,7 @@ function global:prompt {
                 "$([char]0x1B)[1;32m❯$([char]0x1B)[0m "
             }
         } else {
-            $session.Render(
+            [StarshipNative.Session]::Render(
                 $statusCode,        # status
                 $null,              # pipestatus
                 $cmdDuration,       # duration
@@ -251,8 +243,7 @@ $STARSHIP_SESSION_KEY = -join ((48..57) + (65..90) + (97..122) |
 
 # ---- Native: set continuation prompt ----
 try {
-    $session = Get-Session
-    $contPrompt = $session.Render(
+    $contPrompt = [StarshipNative.Session]::Render(
         $null, $null, $null, 0, 0, 0,  # no props needed for continuation
         $null, $null, $null, 2)        # target: Continuation
     Set-PSReadLineOption -ContinuationPrompt $contPrompt
@@ -320,8 +311,5 @@ $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
     } else {
         Remove-Item -Path function:\prompt -ErrorAction Ignore
     }
-    if ($null -ne $script:__Session) {
-        try { $script:__Session.Dispose() } catch {}
-        $script:__Session = $null
-    }
+    try { [StarshipNative.Session]::Shutdown() } catch {}
 }
