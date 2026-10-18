@@ -16,6 +16,7 @@ echo "=== starship fork safety test ==="
 echo "Module dir: $MODULE_DIR"
 
 export STARSHIP_SHELL=zsh
+export TERM=xterm-256color
 module_path=("$MODULE_DIR" $module_path)
 zmodload starship_native || { echo "FAIL: load"; exit 1; }
 echo "PASS: load"
@@ -31,22 +32,27 @@ fi
 
 # ---- Test 1: command substitution $(...) ----
 # zsh forks for $(); the child runs the builtin and inherits the
-# corrupted rayon state. The fork guard must reject the call.
-output=$(starship_prompt 2>/dev/null)
-echo "PASS: \$() command substitution (forked child survived, output len=${#output})"
+# corrupted rayon state. The fork guard must reject the call and the
+# builtin returns non-zero, which is expected here.
+if output=$(starship_prompt 2>/dev/null); then
+    echo "FAIL: fork guard did not reject command substitution"
+    exit 1
+else
+    echo "PASS: \$() command substitution (guard rejected, output len=${#output})"
+fi
 
 # ---- Test 2: background job & ----
 starship_prompt &>/dev/null &
 job_pid=$!
-wait $job_pid 2>/dev/null
+wait $job_pid 2>/dev/null || true
 echo "PASS: background job & (survived)"
 
 # ---- Test 3: pipeline (builtin not last stage) ----
-starship_prompt 2>/dev/null | cat >/dev/null
+starship_prompt 2>/dev/null | cat >/dev/null || true
 echo "PASS: pipeline (builtin as non-last stage)"
 
 # ---- Test 4: subshell ( ) ----
-( starship_prompt 2>/dev/null )
+( starship_prompt 2>/dev/null ) || true
 echo "PASS: subshell ( )"
 
 # ---- Test 5: process substitution <( ) ----

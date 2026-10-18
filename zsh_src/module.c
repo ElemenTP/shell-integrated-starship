@@ -158,6 +158,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
   };
 
   /* Prompt target: 0 = Main, 1 = Right, 2 = Continuation */
+  int failed = 0;
   for (int i = 0; i < 3; i++) {
     char *out = NULL;
     char *err = NULL;
@@ -166,6 +167,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
     err = ssp_render(&input, &out);
     if (err) {
       report_ffi_error(err, BUILTIN_STARSHIP_PROMPT);
+      failed = 1;
       continue;
     }
     if (out) {
@@ -174,7 +176,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
     }
   }
 
-  return 0;
+  return failed;
 }
 
 /* ------------------------------------------------------------------ */
@@ -257,6 +259,8 @@ static int bin_ssp_stats(UNUSED(char *name), char **argv, UNUSED(Options ops),
   SET_INT("STARSHIP_STATS_GIT_REPO_MISSES", st.git_repo_misses);
   SET_INT("STARSHIP_STATS_GIT_METRICS_HITS", st.git_metrics_hits);
   SET_INT("STARSHIP_STATS_GIT_METRICS_MISSES", st.git_metrics_misses);
+  SET_INT("STARSHIP_STATS_JJ_REPO_HITS", st.jj_repo_hits);
+  SET_INT("STARSHIP_STATS_JJ_REPO_MISSES", st.jj_repo_misses);
   SET_INT("STARSHIP_STATS_DIR_CONTENTS_HITS", st.dir_contents_hits);
   SET_INT("STARSHIP_STATS_DIR_CONTENTS_MISSES", st.dir_contents_misses);
   SET_INT("STARSHIP_STATS_BINARY_PATH_HITS", st.binary_path_hits);
@@ -269,10 +273,12 @@ static int bin_ssp_stats(UNUSED(char *name), char **argv, UNUSED(Options ops),
   if (!quiet) {
     unsigned long long total_hits = st.config_hits + st.repo_status_hits +
                                     st.git_repo_hits + st.git_metrics_hits +
-                                    st.dir_contents_hits + st.binary_path_hits;
+                                    st.jj_repo_hits + st.dir_contents_hits +
+                                    st.binary_path_hits;
     unsigned long long total_misses =
         st.config_misses + st.repo_status_misses + st.git_repo_misses +
-        st.git_metrics_misses + st.dir_contents_misses + st.binary_path_misses;
+        st.git_metrics_misses + st.jj_repo_misses + st.dir_contents_misses +
+        st.binary_path_misses;
 
     printf("starship_native session stats (%llu renders):\n", st.renders);
     printf("  total hits=%llu misses=%llu hit_rate=%.1f%%\n", total_hits,
@@ -291,6 +297,8 @@ static int bin_ssp_stats(UNUSED(char *name), char **argv, UNUSED(Options ops),
              st.git_repo_misses);
       printf("  git_metrics:   hits=%llu misses=%llu\n", st.git_metrics_hits,
              st.git_metrics_misses);
+      printf("  jj_repo:       hits=%llu misses=%llu\n", st.jj_repo_hits,
+             st.jj_repo_misses);
       printf("  dir_contents:  hits=%llu misses=%llu\n", st.dir_contents_hits,
              st.dir_contents_misses);
       printf("  binary_path:   hits=%llu misses=%llu\n", st.binary_path_hits,

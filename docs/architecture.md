@@ -12,16 +12,16 @@ Starship 作为 prompt 工具，每次渲染都需要启动独立进程 (`starsh
 将 Starship 编译为 C FFI 动态链接库，由 shell 进程直接加载，实现：
 
 - **零进程创建**：prompt 渲染在 shell 进程内完成
-- **状态缓存**：Session 对象在 shell 生命周期内持久化，缓存 7 类状态
+- **状态缓存**：Session 对象在 shell 生命周期内持久化，缓存 7 类状态（另有 external command output 缓存待实现）
 
 ## 整体架构
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  rust_src/  (starship-ffi crate)                             │
-│  cdylib + staticlib                                          │
+│  cdylib                                                      │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │  ffi.rs — extern "C" ssp_session_* API                 │  │
+│  │  ffi.rs — extern "C" ssp_init/shutdown/render/stats     │  │
 │  │  转换 C RenderInput → Properties，调用 print::get_prompt │  │
 │  └───────────────────┬────────────────────────────────────┘  │
 │                      │ path dependency, features = ["in-process"]
@@ -62,7 +62,7 @@ Starship 源码通过 `#[cfg(feature = "in-process")]` 特性门控进行最小�
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
 | `Cargo.toml`                 | 添加`in-process = ["battery", "notify"]` feature                                                                        |
 | `src/session.rs`             | **新建** — Session/SessionState/7 类缓存/统计                                                                      |
-| `src/context/mod.rs`         | `Properties` 字段 pub；`session: Option<Arc<SessionState>>` 字段；会话路由 (config, dir_contents, git_repo, exec_cmd) |
+| `src/context/mod.rs`         | `Properties` 字段 pub；`session: Option<Arc<SessionState>>` 字段；会话路由 (config, dir_contents, git_repo, jj_repo, exec_cmd) |
 | `src/modules/git_status.rs`  | `get_static_repo_status` 会话路由；`RepoStatus` 增加 `stashed_count`                                                |
 | `src/modules/git_metrics.rs` | diff 结果会话缓存                                                                                                         |
 | `src/config.rs`              | `StarshipConfig` 派生 `Clone`                                                                                         |
@@ -70,7 +70,7 @@ Starship 源码通过 `#[cfg(feature = "in-process")]` 特性门控进行最小�
 
 ### 2. 零模块修改策略
 
-Starship 的 104 个模块实现均为纯函数 `fn(&Context) -> Option<Module>`，
+Starship 的 100+ 个模块实现均为纯函数 `fn(&Context) -> Option<Module>`，
 无需逐个修改。状态持久化通过 **Context 的访问器方法路由到 Session 缓存** 实现。
 
 ### 3. 缓存体系
@@ -79,11 +79,18 @@ Starship 的 104 个模块实现均为纯函数 `fn(&Context) -> Option<Module>`
 | - | ------------------------------- | ------------------- | ------ | ----------------------------------------------- |
 | 1 | Config + RootConfig             | (path, mtime, size) | —     | mtime 或 size 变化                              |
 | 2 | Git repo status + stashed_count | repo_root           | 5000ms | `.git/index`, `HEAD`, `packed-refs` mtime |
-| 3 | Git repo discovery              | current_dir         | 5000ms | —                                              |
+| 3 | Git repo discovery              | current_dir         | 5000ms | `HEAD`, `packed-refs`, `config`, `FETCH_HEAD`, `refs`/`logs/refs` mtime |
 | 4 | Git metrics diff                | repo_root           | 5000ms | 同上（与 repo_status 共享失效文件）             |
-| 5 | Dir contents                    | path                | 5000ms | —                                              |
-| 6 | Binary path resolution          | binary_name         | 5000ms | —                                              |
-| 7 | External command output         | (binary, args)      | —     | 待实现 (P2)                                     |
+| 5 | Jujutsu repo + current change   | current_dir         | 5000ms | `.jj/working_copy`, `.jj/repo/op_heads` mtime   |
+| 6 | Dir contents                    | path                | 5000ms | —                                              |
+| 7 | Binary path resolution          | binary_name         | 5000ms | —                                              |
+| 8 | External command output         | (binary, args)      | —     | 待实现 (P2)                                     |
+
+> **TTL 与工作区新鲜度**：缓存只能感知上面列出的元数据变化。新建未跟踪文件、
+> 修改已跟踪文件、未改变 `.git/index`/`HEAD`/refs 的 worktree 变更不会立即触发
+> 失效，`git_status`/`git_metrics` 最多显示 `STARSHIP_NATIVE_TTL_MS`（默认 5s）
+> 之前的状态。将 TTL 调小可提高新鲜度，设置为 `STARSHIP_NATIVE_NO_CACHE=1`
+> 可完全禁用缓存。
 
 环境变量控制：
 
@@ -113,7 +120,11 @@ const char *ssp_version(void);
 
 **生命周期**：`ssp_init()` 建立进程级唯一 session；`ssp_shutdown()` 丢弃它并
 停止 scoped rayon pool。destroy 之后可以再次 create，新 session 拥有全新的 `SessionState`、
-空缓存和归零的统计信息。重复 create 返回错误；无 session 时 destroy 为成功 no-op。
+空缓存和归零的统计信息。重复 create 是幂等的成功 no-op；无 session 时 destroy 也是成功 no-op。
+
+`ssp_shutdown()` 在销毁时会持有全局 session 锁，直到 `Session::drop` 完成（其中包含约
+100ms 的 rayon worker 退出等待）。shell 宿主是单线程的，因此这是安全的；不要在持有该锁的
+调用路径中依赖并发进度。
 
 **多进程**：每个 shell 进程加载自己的 dylib 副本，因此各自拥有独立 session，互不影响。
 同一进程内不支持多个 session。

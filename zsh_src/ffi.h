@@ -33,6 +33,7 @@ typedef struct {
   unsigned long long repo_status_hits, repo_status_misses;
   unsigned long long git_repo_hits, git_repo_misses;
   unsigned long long git_metrics_hits, git_metrics_misses;
+  unsigned long long jj_repo_hits, jj_repo_misses;
   unsigned long long dir_contents_hits, dir_contents_misses;
   unsigned long long binary_path_hits, binary_path_misses;
   unsigned long long renders;
@@ -52,8 +53,8 @@ typedef struct {
  * after ssp_shutdown() creates a fresh session with empty caches.
  */
 
-/* Create the global session. Returns NULL on success, or an allocated error
- * string if a session already exists or creation fails. */
+/* Create the global session. Returns NULL on success. Idempotent: if a session
+ * already exists this is a successful no-op. */
 char *ssp_init(void);
 
 /* Destroy the global session. Returns NULL on success, including when no

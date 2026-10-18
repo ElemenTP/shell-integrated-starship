@@ -18,6 +18,7 @@ echo "Module dir: $MODULE_DIR"
 echo "Cycles: $CYCLES"
 
 export STARSHIP_SHELL=zsh
+export TERM=xterm-256color
 module_path=("$MODULE_DIR" $module_path)
 
 # Record baseline thread count

@@ -13,6 +13,8 @@ echo "Module dir: $MODULE_DIR"
 
 # Shell type MUST be set before first render (get_shell() OnceLock).
 export STARSHIP_SHELL=zsh
+# Avoid starship's TERM=dumb disabled fallback so the tests exercise a real prompt.
+export TERM=xterm-256color
 
 # Configure module search path
 module_path=("$MODULE_DIR" $module_path)

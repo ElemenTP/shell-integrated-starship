@@ -39,6 +39,7 @@ typedef struct {
   unsigned long long repo_status_hits, repo_status_misses;
   unsigned long long git_repo_hits, git_repo_misses;
   unsigned long long git_metrics_hits, git_metrics_misses;
+  unsigned long long jj_repo_hits, jj_repo_misses;
   unsigned long long dir_contents_hits, dir_contents_misses;
   unsigned long long binary_path_hits, binary_path_misses;
   unsigned long long renders;

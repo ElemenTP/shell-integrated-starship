@@ -154,6 +154,7 @@ public static class Session
                $"RepoStatus: {stats.RepoStatusHits}h/{stats.RepoStatusMisses}m, " +
                $"GitRepo: {stats.GitRepoHits}h/{stats.GitRepoMisses}m, " +
                $"GitMetrics: {stats.GitMetricsHits}h/{stats.GitMetricsMisses}m, " +
+               $"JjRepo: {stats.JjRepoHits}h/{stats.JjRepoMisses}m, " +
                $"DirContents: {stats.DirContentsHits}h/{stats.DirContentsMisses}m, " +
                $"BinaryPath: {stats.BinaryPathHits}h/{stats.BinaryPathMisses}m";
     }
@@ -166,7 +167,7 @@ public static class Session
     /// <summary>
     /// Consume an error pointer returned by a native call: NULL means success
     /// (returns null), otherwise the message is copied into a managed string
-    /// and the native allocation is released with zo_free.
+    /// and the native allocation is released with ssp_free.
     /// </summary>
     private static string? TakeError(IntPtr error)
     {

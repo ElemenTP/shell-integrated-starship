@@ -174,6 +174,7 @@ starship_native session stats (150 renders):
   repo_status:   hits=147 misses=3
   git_repo:      hits=149 misses=1
   git_metrics:   hits=149 misses=1
+  jj_repo:       hits=0 misses=0
   dir_contents:  hits=149 misses=1
   binary_path:   hits=149 misses=1
 ```
@@ -187,6 +188,7 @@ starship_native session stats (150 renders):
 | `STARSHIP_STATS_REPO_STATUS_HITS` / `_MISSES`  | Git 状态缓存         |
 | `STARSHIP_STATS_GIT_REPO_HITS` / `_MISSES`     | Git 仓库发现缓存     |
 | `STARSHIP_STATS_GIT_METRICS_HITS` / `_MISSES`  | Git 文件行数统计缓存 |
+| `STARSHIP_STATS_JJ_REPO_HITS` / `_MISSES`      | Jujutsu 仓库缓存     |
 | `STARSHIP_STATS_DIR_CONTENTS_HITS` / `_MISSES` | 目录扫描缓存         |
 | `STARSHIP_STATS_BINARY_PATH_HITS` / `_MISSES`  | 二进制路径缓存       |
 
@@ -241,16 +243,21 @@ Remove-StarshipEnv STARSHIP_NATIVE_NO_CACHE
 
 ## 缓存体系
 
-全局 session 在 shell 进程生命周期内持久化，以下 6 类状态自动缓存；destroy 后再 create 会得到全新的空缓存：
+全局 session 在 shell 进程生命周期内持久化，以下 7 类状态自动缓存；destroy 后再 create 会得到全新的空缓存：
 
 | 缓存                         | 内容                                                        | 失效策略                                           |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
 | **Config**             | `starship.toml` 解析结果 + `StarshipRootConfig`         | 文件 mtime/size 变化                               |
 | **Git repo status**    | 完整 git 状态 (staged/modified/untracked/... + stash count) | TTL +`.git/index`/`HEAD`/`packed-refs` mtime |
-| **Git repo discovery** | repo 对象 (branch/remote/fsmonitor)                         | TTL (key = current_dir)                            |
+| **Git repo discovery** | repo 对象 (branch/remote/fsmonitor)                         | TTL + `HEAD`/`packed-refs`/`config`/`FETCH_HEAD`/refs mtime |
 | **Git metrics**        | 文件增删行数 (blob diff)                                    | TTL +`.git/index`/`HEAD`/`packed-refs` mtime |
+| **Jujutsu repo**       | jj 仓库根 + 当前 change / status                            | TTL +`.jj/working_copy`/`.jj/repo/op_heads` mtime |
 | **Dir contents**       | 目录文件列表 (扩展名/文件名)                                | TTL (key = path)                                   |
 | **Binary path**        | `which::which` 结果 (二进制路径)                          | TTL (key = binary_name)                            |
+
+> **注意**：缓存不会监听每一个工作区文件。新建未跟踪文件、修改已跟踪文件等不改变
+> `.git/index`/`HEAD`/refs 的操作，最多会滞后一个 TTL（默认 5s）。可通过
+> `STARSHIP_NATIVE_TTL_MS` 调整 TTL，或设置 `STARSHIP_NATIVE_NO_CACHE=1` 完全禁用缓存。
 
 ## 运行测试
 
@@ -261,10 +268,10 @@ cd rust_src && cargo test --release
 
 # C 冒烟测试
 cmake --build build --config Release --target ffi_smoke
-./tests/ffi_smoke rust_src/target/release/libstarship_ffi.so (or libstarship_ffi.dylib)
+./build/ffi_smoke rust_src/target/release/libstarship_ffi.so (or libstarship_ffi.dylib)
 
-# zsh 集成测试
-cmake --build build --config Release --target test-zsh
+# zsh 集成测试（TERM=xterm-256color 才会渲染真实 prompt；TERM=dumb 会走 disabled 回退）
+TERM=xterm-256color cmake --build build --config Release --target test-zsh
 
 # fork 安全回归测试（$(...)、&、管道、子shell）
 MODULE_DIR=zsh_src/build/Release zsh tests/test_fork_zsh.sh

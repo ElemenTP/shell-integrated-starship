@@ -122,6 +122,8 @@ pub struct ssp_out_stats {
     pub git_repo_misses: u64,
     pub git_metrics_hits: u64,
     pub git_metrics_misses: u64,
+    pub jj_repo_hits: u64,
+    pub jj_repo_misses: u64,
     pub dir_contents_hits: u64,
     pub dir_contents_misses: u64,
     pub binary_path_hits: u64,
@@ -219,7 +221,7 @@ static SESSION: Mutex<Option<starship::session::Session>> = Mutex::new(None);
 /// touching a mutex that may have been held when `fork()` happened.
 static SESSION_PID: AtomicU32 = AtomicU32::new(0);
 
-/// Run `f` with the global session, or fail when `zo_init` has not been called.
+/// Run `f` with the global session, or fail when `ssp_init` has not been called.
 ///
 /// The lock is held for the duration of one native operation. Shell hosts are
 /// single-threaded, so this is serialization, not a concurrency feature; the
@@ -257,8 +259,9 @@ macro_rules! guard_fork {
 
 /// Create the global prompt rendering session.
 ///
-/// Returns NULL on success. If a session already exists, returns an allocated
-/// error string (free it with `ssp_free()`).
+/// Returns NULL on success. This is idempotent: if a session already exists it
+/// is left untouched and NULL is returned, so callers such as PowerShell's
+/// `Session.Initialize()` can safely call it more than once.
 ///
 /// Calling this after `ssp_shutdown()` is supported and creates a fresh
 /// session with an empty cache and zeroed statistics.
@@ -293,8 +296,10 @@ pub extern "C" fn ssp_shutdown() -> *mut c_char {
     ffi_guard_error!({
         guard_fork!();
 
-        // Take the session out while holding the lock, then release the lock
-        // before dropping it: `Session::drop` waits for rayon workers to exit.
+        // Drop the session while holding the global session lock. The shell
+        // host is single-threaded, and `Session::drop` waits briefly (~100ms)
+        // for rayon workers to exit; keeping this simple avoids handing out a
+        // half-shut-down session to a concurrent caller.
         let mut guard = SESSION
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -416,6 +421,8 @@ pub unsafe extern "C" fn ssp_stats(out: *mut ssp_out_stats) -> *mut c_char {
             git_repo_misses: stats.git_repo_misses,
             git_metrics_hits: stats.git_metrics_hits,
             git_metrics_misses: stats.git_metrics_misses,
+            jj_repo_hits: stats.jj_repo_hits,
+            jj_repo_misses: stats.jj_repo_misses,
             dir_contents_hits: stats.dir_contents_hits,
             dir_contents_misses: stats.dir_contents_misses,
             binary_path_hits: stats.binary_path_hits,
@@ -496,13 +503,13 @@ mod tests {
         destroy_session();
     }
 
-    /// Test that creating a second session while one is active does not fail.
+    /// Test that `ssp_init` is idempotent.
     #[test]
-    fn test_create_twice_errors() {
+    fn test_create_twice_is_idempotent() {
         let _guard = test_guard();
         create_session();
         let err = ssp_init();
-        assert!(err.is_null(), "second create should not return an error");
+        assert!(err.is_null(), "second create should be a no-op success");
         destroy_session();
     }
 

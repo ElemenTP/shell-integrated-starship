@@ -293,19 +293,22 @@ if(BUILD_PWSH_MODULE)
         USES_TERMINAL
     )
 
+    # Install the managed assembly from the dotnet output directory, but take
+    # the native FFI library from its canonical Cargo output and the module
+    # scripts from pwsh_src/.  Copying the native library out of PWSH_OUT_DIR
+    # can silently install a stale .so/.dylib if that directory was not
+    # refreshed by the latest build.
     install(DIRECTORY "${PWSH_OUT_DIR}/"
         DESTINATION "share/pwsh/modules/starship-native"
         FILES_MATCHING
         PATTERN "*.dll"
-        PATTERN "*.psd1"
-        PATTERN "*.psm1"
-        PATTERN "*.so"
-        PATTERN "*.dylib"
     )
-    # The manifest (.psd1) and script module (.psm1) live in pwsh_src/ and are
-    # copied into the dotnet output dir by the csproj (CopyToOutputDirectory),
-    # so the install rule above picks them up automatically. No extra install
-    # of pwsh_src files is needed.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/pwsh_src/starship-native.psd1"
+        "${CMAKE_SOURCE_DIR}/pwsh_src/starship-native.psm1"
+        "${FFI_SHARED}"
+        DESTINATION "share/pwsh/modules/starship-native"
+    )
 endif()
 
 # ── Tests ──────────────────────────────────────────────────────────────────

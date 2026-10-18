@@ -29,6 +29,10 @@ Write-Host "PASS: assembly file found"
 try {
     Add-Type -Path $asmPath
     Write-Host "PASS: assembly loaded"
+
+    # Match the shell module's environment before the first render.
+    [StarshipNative.StarshipEnvironment]::Set('STARSHIP_SHELL', 'pwsh')
+    [StarshipNative.StarshipEnvironment]::Set('TERM', 'xterm-256color')
 } catch {
     Write-Host "FAIL: could not load assembly: $_"
     exit 1

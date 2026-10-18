@@ -149,6 +149,7 @@ internal struct SspStats
     public ulong RepoStatusHits, RepoStatusMisses;
     public ulong GitRepoHits, GitRepoMisses;
     public ulong GitMetricsHits, GitMetricsMisses;
+    public ulong JjRepoHits, JjRepoMisses;
     public ulong DirContentsHits, DirContentsMisses;
     public ulong BinaryPathHits, BinaryPathMisses;
     public ulong Renders;

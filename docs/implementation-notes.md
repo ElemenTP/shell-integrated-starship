@@ -6,14 +6,17 @@
 
 ### 1.1 Clone 派生问题
 
-`Context` 中的缓存数据结构最初未派生 `Clone`：
+`Context` 中需要跨 render 复用的缓存数据结构需要 `Clone`：
 
 - `StarshipConfig` — 仅有 `Default`，需添加 `Clone`（`toml::Table` 已实现 Clone）
 - `DirContents` — 仅有 `Debug`，需添加 `Clone`（内部为 `HashSet`，均可 Clone）
-- `GitRepo` — 包含 `ThreadSafeRepository`，**未添加 Clone**，因为 git repo 发现操作本身廉价，不值得缓存
+- `GitRepo` — 包含 `ThreadSafeRepository`；v1.27 起增加了 `Clone` 实现，并显式复制
+  `trust`、`fs_monitor_value_is_true` 等字段，`state` 在 clone 时置空、缓存命中时再刷新
+- `JJRepo` — 不直接 Clone；session 缓存使用 `Arc<JJRepo>`，其中的
+  `OnceLock<Option<CurrentChange>>` 会随 Arc 一起复用
 
-**教训**：并非所有数据都需要缓存。优先缓存真正昂贵的操作（git status、目录扫描），
-廉价的 repo 发现操作每次渲染重新执行即可。
+**教训**：优先缓存真正昂贵的操作（git status、git metrics、目录扫描、jj show）；
+廉价的 repo 发现操作可以在 miss 时重新执行。
 
 ### 1.2 Session 缓存与 OnceLock 的协作
 
@@ -33,7 +36,8 @@ Session 路由策略：在 `get_or_init` 的闭包中先检查 Session 缓存，
 // 改造后（特性门控）
 self.dir_contents.get_or_init(|| {
     // 1. 尝试 Session 缓存
-    if let Some(session) = crate::session::find_session(session_id) {
+    #[cfg(feature = "in-process")]
+    if let Some(ref session) = self.session {
         if let Some(cached) = session.get_dir_contents(current_dir) {
             return cached;
         }
@@ -41,14 +45,17 @@ self.dir_contents.get_or_init(|| {
     // 2. 计算
     let result = DirContents::from_path_with_timeout(/* ... */);
     // 3. 写入 Session 缓存（下次渲染复用）
-    if let Some(session) = crate::session::find_session(session_id) {
+    #[cfg(feature = "in-process")]
+    if let Some(ref session) = self.session {
         session.put_dir_contents(current_dir.clone(), &result);
     }
     result
 }).as_ref()
 ```
 
-这种方式无需修改 `dir_contents()` 的方法签名和所有调用点。
+`Context` 通过 `session: Option<Arc<SessionState>>` 直接持有 session 引用，不存在
+`find_session(session_id)` 或全局 registry；每次 `Session::render` 在构造 `Context`
+时把 `Arc<SessionState>` 传进去。这样无需修改 `dir_contents()` 的方法签名和所有调用点。
 
 ### 1.3 git_status 的全局静态变量替换
 
@@ -57,8 +64,9 @@ self.dir_contents.get_or_init(|| {
 
 改造为 Session 路由后：
 
-- `session_id != 0` → 查询 Session 缓存（路径 + index/HEAD/packed-refs mtime 检测）
-- `session_id == 0` → 回退到原始 `static` 行为（兼容独立二进制）
+- `context.session = Some(Arc<SessionState>)` → 查询 Session 缓存
+  （路径 + index/HEAD/packed-refs mtime 检测）
+- `context.session = None` → 回退到原始 `static REPO_STATUS` 行为（兼容独立二进制）
 
 ### 1.4 Cargo feature 的组织
 
@@ -67,6 +75,9 @@ self.dir_contents.get_or_init(|| {
 - `#[cfg(feature = "in-process")]` 只在添加新功能时使用
 - 不改变现有公开 API 的行为
 - 默认 feature 保持不变（`default = ["battery", "notify"]`）
+- 已知偏差：`Context::get_shell()` 的 `OnceLock` 目前在默认构建中也会缓存
+  `STARSHIP_SHELL`。单进程单 shell 下没有功能影响，但严格来说不是纯加法；如需
+  完全保持默认行为，可将该缓存 feature-gate 到 `in-process`。
 
 验证方法：
 
@@ -230,32 +241,28 @@ nm zsh_src/build/starship_native.so | grep -E "^[0-9a-f]+ T (boot_|setup_|finish
 
 ### 4.2 原生库加载路径
 
-PowerShell 模块的 `RootModule` 是托管 DLL，Native 库需要与其放在同一目录：
+PowerShell 模块的 `RootModule` 是 `starship-native.psm1`，`StarshipNative.dll` 通过
+`NestedModules` 加载。Native 库需要与托管 DLL 放在同一目录：
 
 ```
-StarshipNative/bin/Release/net8.0/
-├── StarshipNative.dll      ← RootModule (托管)
-└── libstarship_ffi.so      ← Native 库（需手动复制）
+share/pwsh/modules/starship-native/
+├── starship-native.psd1    ← RootModule 清单
+├── starship-native.psm1    ← RootModule
+├── StarshipNative.dll      ← NestedModule（托管 P/Invoke）
+└── libstarship_ffi.so      ← Native 库
 ```
+
+CMake 安装规则从 Cargo 输出直接安装 native 库、从 `pwsh_src/` 安装脚本，避免从
+dotnet 输出目录拷贝到陈旧的 `.so`/`.dylib`。
 
 `AppContext.BaseDirectory` 在模块加载时指向此目录。
 
 ### 4.3 跨平台库名处理
 
-当前 `LibraryImport("libstarship_ffi.so")` 硬编码了 Linux 名称。
-生产代码应使用条件编译或自定义导入解析器：
-
-```csharp
-#if WINDOWS
-    private const string LibName = "starship_ffi.dll";
-#elif OSX
-    private const string LibName = "libstarship_ffi.dylib";
-#else
-    private const string LibName = "libstarship_ffi.so";
-#endif
-```
-
-或使用 `NativeLibrary.SetDllImportResolver` 动态选择。
+`NativeMethods` 使用中性 `LibName = "starship_ffi"`，并通过
+`NativeLibrary.SetDllImportResolver` 处理 `STARSHIP_FFI_PATH` 与默认探测；
+运行时按平台解析为 `libstarship_ffi.so` / `libstarship_ffi.dylib` /
+`starship_ffi.dll`，不再硬编码单一平台文件名。
 
 ## 5. 构建系统
 
@@ -297,7 +304,8 @@ zsh 的 `${#var}` 会被 CMake 解析为非法变量名。
 
 ### 5.4 动态链接方案
 
-zsh 模块从最初静态链接 `libstarship_ffi.a`（21MB）改为动态链接 `libstarship_ffi.so`（15KB）。
+zsh 模块从最初静态链接 `libstarship_ffi.a` 改为动态链接 `libstarship_ffi.so`。
+当前 `libstarship_ffi.so` 约 10.7MB，zsh shim（`starship_native.so`）约 15KB。
 `$ORIGIN` rpath 使 `.so` 可在同目录被找到，与 pwsh 模块共享同一个 `libstarship_ffi.so`。
 
 ```cmake
@@ -328,11 +336,11 @@ macOS 使用 `-undefined dynamic_lookup` 达到同等效果。
 | 层级                | 测试目标                                 | 工具                                 |
 | ------------------- | ---------------------------------------- | ------------------------------------ |
 | Rust 单元测试       | `session.rs` 缓存逻辑、`ffi.rs` 导出 | `cargo test`                       |
-| Starship 回归       | 默认构建所有 1238 个测试通过             | `cargo test` (feature off)         |
-| Starship in-process | feature 开启时编译通过且测试不变         | `cargo test --features in-process` |
+| Starship 回归       | 默认构建通过（v1.27.0 + in-process 约 1324 个测试） | `cargo test` (feature off)         |
+| Starship in-process | feature 开启时编译通过且测试通过         | `cargo test --features in-process` |
 | C FFI 冒烟测试      | 通过 dlopen 调用所有 ssp_* 函数          | `gcc` + `dlopen`                 |
 | zsh 集成测试        | 加载模块、渲染 prompt、统计缓存命中      | `zsh -c` 脚本                      |
-| pwsh 集成测试       | Add-Type 加载、创建 Session、渲染、销毁  | `pwsh -NoProfile -Command`         |
+| pwsh 集成测试       | Import-Module、prompt、recreate、卸载    | `pwsh -NoProfile -Command`         |
 
 ### 测试环境注意
 
@@ -356,14 +364,14 @@ macOS 使用 `-undefined dynamic_lookup` 达到同等效果。
 - PowerShell 的 `prompt` 函数机制与 zsh 不同：pwsh 在每次显示 prompt 时调用 `prompt` 函数，
   支持通过 `$function:prompt` 覆盖
 
-## 8. 统计系统 (StatsStatus)
+## 8. 统计系统 (SessionStatsCounters)
 
 ### 8.1 原子计数器
 
-统计字段使用 `std::sync::atomic::AtomicU64` 而非 `Mutex<Stats>`：
+统计字段使用 `std::sync::atomic::AtomicU64` 而非 `Mutex<SessionStats>`：
 
 ```rust
-pub struct StatsStatus {
+pub struct SessionStatsCounters {
     pub config_hits:          atomic::AtomicU64,
     pub config_misses:        atomic::AtomicU64,
     pub repo_status_hits:     atomic::AtomicU64,
@@ -372,6 +380,8 @@ pub struct StatsStatus {
     pub git_repo_misses:      atomic::AtomicU64,
     pub git_metrics_hits:     atomic::AtomicU64,
     pub git_metrics_misses:   atomic::AtomicU64,
+    pub jj_repo_hits:         atomic::AtomicU64,
+    pub jj_repo_misses:       atomic::AtomicU64,
     pub dir_contents_hits:    atomic::AtomicU64,
     pub dir_contents_misses:  atomic::AtomicU64,
     pub binary_path_hits:     atomic::AtomicU64,
@@ -381,7 +391,7 @@ pub struct StatsStatus {
 ```
 
 每个缓存操作直接 `fetch_add(1, Ordering::Relaxed)` 递增对应的原子计数器，
-无需获取 Mutex 锁。对外通过 `Stats`（普通 struct）导出快照。
+无需获取 Mutex 锁。对外通过 `SessionStats`（普通 struct）导出快照。
 
 ### 8.2 zsh 集成
 
@@ -391,13 +401,14 @@ pub struct StatsStatus {
 ```zsh
 $ starship_stats -v
 starship_native session stats (3 renders):
-  total hits=2 misses=4 hit_rate=33.3%
+  total hits=2 misses=5 hit_rate=28.6%
   config:        hits=2 misses=1
   repo_status:   hits=0 misses=1
   git_repo:      hits=0 misses=1
   git_metrics:   hits=0 misses=0
+  jj_repo:       hits=0 misses=0
   dir_contents:  hits=0 misses=1
-  binary_path:   hits=0 misses=0
+  binary_path:   hits=0 misses=1
 
 $ echo $STARSHIP_STATS_RENDERS
 3
@@ -405,8 +416,9 @@ $ echo $STARSHIP_STATS_RENDERS
 
 ### 8.3 FFI 层
 
-`ssp_stats_t` 结构体在 `ffi.h` 中定义，包含 13 个 `unsigned long long` 字段。
-`ssp_stats()` 从 `StatsStatus` 中原子读取每个字段，组装为 C struct 返回。
+`ssp_stats_t` 结构体在 `ffi.h` 中定义，包含 15 个 `unsigned long long` 字段
+（13 个原有字段 + `jj_repo_hits` / `jj_repo_misses`）。
+`ssp_stats()` 从 `SessionStats` 中读取每个字段，组装为 C struct 返回。
 
 ## 9. 进程安全机制
 
@@ -472,8 +484,10 @@ impl Drop for Session {
 }
 ```
 
-`ssp_shutdown()` 取走全局 `Option<Session>` 并 drop，因此 destroy→create
-时旧 pool 已终止，新 create 会构建新 pool。
+`ssp_shutdown()` 取走并 drop 全局 `Option<Session>`，因此 destroy→create
+时旧 pool 已终止，新 create 会构建新 pool。注意：当前实现是在持有全局 session
+Mutex 的情况下完成 drop 的，因此 `ssp_shutdown()` 会阻塞约 100ms；shell 宿主是
+单线程的，这是刻意保留的简单实现，不应在并发调用路径中依赖 shutdown 期间的进度。
 
 zsh 卸载链：`zmodload -u` → `cleanup_()` → `ssp_shutdown()` → `dlclose` 安全。
 
@@ -518,13 +532,24 @@ macro_rules! ffi_guard_error {
 | `print.rs` `static ANSI_REGEX: OnceLock<Regex>` | 固定正则缓存 | 无 session 数据 | 无影响 |
 | `logger.rs` 的全局 logger | 日志文件句柄 | FFI 库不调用 `logger::init()` | 无影响 |
 | `context/mod.rs` 的 `dir_contents` / `git_repo` `OnceLock` | 每次 `Context` 新建 | 无影响 | 缓存跨 render 由 `SessionState` 承载 |
+| `context/jj_repo.rs` 的 `JJRepo` / `CurrentChange` `OnceLock` | 每次 `Context` 新建 | 无影响 | jj repo 由 session 以 `Arc<JJRepo>` 缓存，TTL/mtime 控制失效 |
 | `modules/gcloud.rs`、`modules/rust.rs`、`modules/aws.rs` 中的 `OnceLock`/`OnceCell` | 每次 render 局部结构 | 无影响 | 不跨 session |
 | `formatter/version.rs`、各 module 的 `LazyLock` | 函数内局部或常量 | 无影响 | 无状态或每次重建 |
 
 因此：
 - destroy→create 会得到空缓存和归零的统计，功能正确。
-- 唯一需要记录的边界是 `STARSHIP_SHELL` 的进程级缓存；目标环境（一个 shell 进程只服务一种 shell）不受影响。
-- 不需要为本次改造修改 `starship` 源码。
+- 唯一需要记录的 shell 状态边界是 `STARSHIP_SHELL` 的进程级缓存；目标环境
+  （一个 shell 进程只服务一种 shell）不受影响。
+- 为支持 v1.27 的 Jujutsu 功能和缓存正确性，in-process 分支会修改
+  `src/session.rs`、`src/context/mod.rs`（git repo 失效文件、jj repo 缓存）以及
+  统计字段；这些修改均受 `in-process` feature 控制。
+
+**缓存新鲜度限制**：`git_status`/`git_metrics` 的失效文件只覆盖
+`.git/index`/`HEAD`/`packed-refs`；新建未跟踪文件、修改已跟踪文件等 worktree
+变更不会立即失效，最多滞后 `STARSHIP_NATIVE_TTL_MS`（默认 5000ms）。
+`git_repo` 缓存现在额外监听 `HEAD`/`packed-refs`/`config`/`FETCH_HEAD`/refs，
+因此 checkout/fetch 会立即刷新 branch/remote。`jj_repo` 缓存监听
+`.jj/working_copy` 与 `.jj/repo/op_heads`。
 
 ## 10. Fork/Unload 回归测试
 
