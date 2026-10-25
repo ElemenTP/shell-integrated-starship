@@ -21,6 +21,14 @@ option(BUILD_TESTS        "Build test executables"                          ON)
 # Starship source: "AUTO" (clone from GitHub) or a local path.
 set(STARSHIP_SOURCE "AUTO" CACHE STRING
     "Starship source: 'AUTO' to clone from GitHub, or a local path")
+# The in-process feature is developed on a branch, so pin the commit (not the
+# moving branch) to keep AUTO builds reproducible. Bump this after rebasing the
+# branch; a local STARSHIP_SOURCE checkout that differs only gets a warning.
+set(STARSHIP_GIT_TAG "3116a1e70f4b503177bba1e99f992e05d4e93d91" CACHE STRING
+    "Starship commit/tag to fetch when STARSHIP_SOURCE=AUTO")
+# The Starship version the FFI reports. Empty = derive it from the checkout.
+set(STARSHIP_VERSION "" CACHE STRING
+    "Starship version embedded in the FFI (empty: derive from STARSHIP_SRC_DIR/Cargo.toml)")
 # zsh source: "AUTO" (download zsh 5.9.2) or a local path to configured tree.
 set(ZSH_SOURCE "AUTO" CACHE STRING
     "zsh source: 'AUTO' to download zsh 5.9.2, or path to configured source tree")
@@ -48,11 +56,18 @@ endif()
 # ══════════════════════════════════════════════════════════════════════════
 set(STARSHIP_LINK "${CMAKE_SOURCE_DIR}/starship")
 if(STARSHIP_SOURCE STREQUAL "AUTO")
-    message(STATUS "Fetching starship from GitHub (in-process branch)...")
+    message(STATUS "Fetching starship from GitHub (${STARSHIP_GIT_TAG})...")
+    # `GIT_SHALLOW` cannot check out a commit that is not the branch tip, so
+    # only shallow-clone when the pin names a branch or tag.
+    if(STARSHIP_GIT_TAG MATCHES "^[0-9a-f]{7,40}$")
+        set(_starship_shallow FALSE)
+    else()
+        set(_starship_shallow TRUE)
+    endif()
     FetchContent_Declare(starship-src
         GIT_REPOSITORY "https://github.com/ElemenTP/starship"
-        GIT_TAG        in-process
-        GIT_SHALLOW    TRUE
+        GIT_TAG        "${STARSHIP_GIT_TAG}"
+        GIT_SHALLOW    ${_starship_shallow}
     )
     FetchContent_MakeAvailable(starship-src)
     set(STARSHIP_SRC_DIR "${starship-src_SOURCE_DIR}")
@@ -63,6 +78,40 @@ else()
     endif()
 endif()
 message(STATUS "Starship source: ${STARSHIP_SRC_DIR}")
+
+# ── Starship version (embedded in the FFI) ─────────────────────────────────
+# The FFI reports the version of the Starship it embeds, so derive it from the
+# resolved checkout instead of duplicating it in this file.
+if(NOT STARSHIP_VERSION)
+    file(STRINGS "${STARSHIP_SRC_DIR}/Cargo.toml" _starship_version_line
+        REGEX "^version = \"[0-9]+\\.[0-9]+\\.[0-9]+")
+    if(_starship_version_line)
+        string(REGEX MATCH "\"([^\"]+)\"" _starship_version_match "${_starship_version_line}")
+        set(STARSHIP_VERSION "${CMAKE_MATCH_1}")
+    endif()
+endif()
+if(NOT STARSHIP_VERSION)
+    message(FATAL_ERROR
+        "Could not read the starship version from ${STARSHIP_SRC_DIR}/Cargo.toml; "
+        "pass -DSTARSHIP_VERSION=<x.y.z>")
+endif()
+message(STATUS "Starship version: ${STARSHIP_VERSION}")
+
+# A local checkout may be ahead of/behind the pin (an in-tree development
+# build); warn, but keep it buildable.
+if(EXISTS "${STARSHIP_SRC_DIR}/.git")
+    execute_process(
+        COMMAND git -C "${STARSHIP_SRC_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE _starship_head
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _starship_git_rc
+        ERROR_QUIET)
+    if(_starship_git_rc EQUAL 0 AND NOT _starship_head STREQUAL STARSHIP_GIT_TAG)
+        message(WARNING
+            "Starship checkout ${_starship_head} differs from the pinned STARSHIP_GIT_TAG "
+            "${STARSHIP_GIT_TAG}; pass -DSTARSHIP_GIT_TAG to update the pin")
+    endif()
+endif()
 
 # Create symlink so rust_src/Cargo.toml path dependency resolves correctly.
 # rust_src/Cargo.toml expects: starship = { path = "../starship" }
@@ -152,6 +201,7 @@ set(FFI_SHARED "${RUST_SRC_DIR}/target/${CARGO_PROFILE_DIR}/${FFI_NAME}")
 # one of the inputs below changed.
 set(STARSHIP_FFI_DEPENDS
     "${RUST_SRC_DIR}/src"
+    "${RUST_SRC_DIR}/build.rs"
     "${RUST_SRC_DIR}/Cargo.toml"
     "${RUST_SRC_DIR}/Cargo.lock"
 )
@@ -178,7 +228,12 @@ endif()
 
 add_custom_command(
     OUTPUT "${FFI_SHARED}"
-    COMMAND ${CARGO} build ${CARGO_RELEASE_FLAG}
+    # build.rs embeds STARSHIP_VERSION (and STARSHIP_COMMIT) in the library, so
+    # the reported version follows the Starship checkout we build against.
+    COMMAND ${CMAKE_COMMAND} -E env
+        "STARSHIP_VERSION=${STARSHIP_VERSION}"
+        "STARSHIP_COMMIT=${STARSHIP_GIT_TAG}"
+        ${CARGO} build ${CARGO_RELEASE_FLAG}
     ${STARSHIP_FFI_FIX}
     WORKING_DIRECTORY "${RUST_SRC_DIR}"
     DEPENDS ${STARSHIP_FFI_DEPENDS}
@@ -333,6 +388,7 @@ if(BUILD_TESTS)
         add_custom_target(test-zsh
             COMMAND ${CMAKE_COMMAND} -E env
                 "MODULE_DIR=${CMAKE_SOURCE_DIR}/zsh_src/build/$<CONFIG>"
+                "STARSHIP_VERSION=${STARSHIP_VERSION}"
                 zsh "${CMAKE_SOURCE_DIR}/tests/test_zsh.sh"
             DEPENDS ${ZSH_MODULE_NAME}
             USES_TERMINAL
@@ -343,6 +399,7 @@ if(BUILD_TESTS)
         add_custom_target(test-pwsh
             COMMAND ${CMAKE_COMMAND} -E env
                 "DLL_DIR=${PWSH_OUT_DIR}"
+                "STARSHIP_VERSION=${STARSHIP_VERSION}"
                 pwsh -NoProfile -File "${CMAKE_SOURCE_DIR}/tests/test_pwsh.ps1"
             DEPENDS starship_pwsh
             USES_TERMINAL
@@ -361,6 +418,8 @@ message(STATUS "starship-native ${PROJECT_VERSION} — Build Configuration")
 message(STATUS "──────────────────────────────────────────────────")
 message(STATUS "Generator:         ${CMAKE_GENERATOR}")
 message(STATUS "Starship source:   ${STARSHIP_SRC_DIR}")
+message(STATUS "Starship version:  ${STARSHIP_VERSION}")
+message(STATUS "Starship pin:      ${STARSHIP_GIT_TAG}")
 message(STATUS "Zsh source:        ${ZSH_SRC_DIR}")
 message(STATUS "Zsh module:        ${BUILD_ZSH_MODULE}")
 message(STATUS "PowerShell module: ${BUILD_PWSH_MODULE}")

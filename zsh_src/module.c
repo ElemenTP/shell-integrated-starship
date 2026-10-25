@@ -184,7 +184,7 @@ static int bin_ssp_prompt(UNUSED(char *name), UNUSED(char **argv),
 /* ------------------------------------------------------------------ */
 
 /**
- * Show the verion of starship-native, also expose as zsh parameters:
+ * Show the embedded upstream Starship version, also expose as zsh parameter:
  * STARSHIP_VERSION
  *
  * Usage:

@@ -40,6 +40,13 @@ cmake -B build -S .
 cmake --build build --config Release
 ```
 
+`AUTO` 会从 GitHub clone **固定的 commit**（`STARSHIP_GIT_TAG`），而不是移动中的
+`in-process` 分支，所以构建可复现；rebase 分支后需要把 pin 更新到新的 tip
+（本地源码树的 commit 与 pin 不一致时 CMake 只给出 warning，方便开发）。
+FFI 的上报版本由 `rust_src/build.rs` 从 Starship 源码树的 `Cargo.toml` 读取
+（CMake 也会以 `STARSHIP_VERSION` 传入，可用 `-DSTARSHIP_VERSION=` 覆盖），
+`ssp_version()` 返回的是**上游 Starship 版本**，不是 wrapper 自己的 crate 版本。
+
 ### 使用本地源码
 
 ```bash
@@ -73,7 +80,9 @@ sudo cmake --install build --config Release --prefix /usr/local
 
 | 选项                  | 默认值    | 说明                                                    |
 | --------------------- | --------- | ------------------------------------------------------- |
-| `STARSHIP_SOURCE`   | `AUTO`  | Starship 源码：`AUTO` 从 GitHub clone，或本地路径     |
+| `STARSHIP_SOURCE`   | `AUTO`  | Starship 源码：`AUTO` 从 GitHub 拉取 `STARSHIP_GIT_TAG`，或本地路径 |
+| `STARSHIP_GIT_TAG`  | `3116a1e7…`（当前 in-process tip） | `STARSHIP_SOURCE=AUTO` 时钉住的 Starship commit；也可以写 branch/tag |
+| `STARSHIP_VERSION`  | 空（自动） | FFI 上报的 Starship 版本；空则从源码树的 `Cargo.toml` 派生 |
 | `ZSH_SOURCE`        | `AUTO`  | zsh 源码：`AUTO` 下载 zsh 5.9.2，或已配置的源码树路径 |
 | `ZSH_VERSION`       | `5.9.2` | 下载 zsh 的版本（ZSH_SOURCE=AUTO 时）                   |
 | `BUILD_ZSH_MODULE`  | `ON`    | 构建 zsh 可加载模块                                     |
@@ -158,7 +167,7 @@ export STARSHIP_NATIVE_TTL_MS=10000
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `starship_prompt`  | 渲染 prompt。读取 zsh 参数，调用 FFI 3 次 (Main/Right/Continuation)，写入`STARSHIP_PROMPT` / `STARSHIP_RPROMPT` / `STARSHIP_PROMPT2` |
 | `starship_stats`   | 显示缓存统计。`-v` 详细模式，`-q` 静默模式（仅设置参数）                                                                               |
-| `starship_version` | 显示原生库版本，`-q` 静默模式（仅设置参数）                                                                                              |
+| `starship_version` | 显示嵌入的上游 Starship 版本，`-q` 静默模式（仅设置参数）                                                                                |
 
 **fork 安全**：在 `$(...)`、`&`、管道非末位、子 shell 中调用 builtin 时，
 fork guard 会拒绝调用并返回安全默认值，不会崩溃。见「进程安全」章节。
@@ -214,7 +223,7 @@ Import-Module starship-native
 Set-StarshipEnv STARSHIP_NATIVE_TTL_MS 10000
 
 # 辅助命令
-Get-StarshipNativeVersion   # 原生库版本
+Get-StarshipNativeVersion   # 嵌入的上游 Starship 版本
 Get-StarshipNativeStats     # 缓存统计
 ```
 

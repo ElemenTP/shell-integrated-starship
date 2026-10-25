@@ -101,9 +101,9 @@ internal static unsafe partial class NativeMethods
     // ── Metadata ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Return the library version as a static, null-terminated UTF-8 string.
-    /// Must NOT be freed. Returns a raw pointer; use
-    /// <see cref="Marshal.PtrToStringUTF8"/> to read.
+    /// Return the embedded upstream Starship version as a static,
+    /// null-terminated UTF-8 string. Must NOT be freed. Returns a raw pointer;
+    /// use <see cref="Marshal.PtrToStringUTF8"/> to read.
     /// </summary>
     [LibraryImport(LibName, EntryPoint = "ssp_version")]
     internal static partial IntPtr Version();

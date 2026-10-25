@@ -41,7 +41,19 @@ try {
 # Check version
 try {
     $ver = [StarshipNative.Session]::Version()
-    Write-Host "PASS: version $ver"
+    $expectedVersion = $env:STARSHIP_VERSION
+    if ($expectedVersion) {
+        if ($ver -ne $expectedVersion) {
+            Write-Host "FAIL: native version '$ver' != embedded starship version '$expectedVersion'"
+            exit 1
+        }
+        Write-Host "PASS: version $ver (matches embedded starship)"
+    } elseif ($ver -match '^\d+\.\d+\.\d+') {
+        Write-Host "PASS: version $ver"
+    } else {
+        Write-Host "FAIL: version '$ver' is not a semver"
+        exit 1
+    }
 } catch {
     Write-Host "FAIL: could not get version: $_"
     exit 1

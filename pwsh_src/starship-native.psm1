@@ -54,7 +54,7 @@ $script:__NativeWarned = $false
 function Get-StarshipNativeVersion {
     <#
     .SYNOPSIS
-        Returns the version of the embedded starship-ffi native library.
+        Returns the upstream Starship version embedded in the FFI library.
     #>
     return [StarshipNative.Session]::Version()
 }

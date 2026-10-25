@@ -30,6 +30,26 @@ if ! zmodload starship_native 2>/dev/null; then
 fi
 echo "PASS: module loaded"
 
+# Version: the builtin should report the upstream Starship version embedded in
+# the FFI. CMake passes STARSHIP_VERSION for an exact comparison; a plain run
+# only checks the semver shape.
+expected_starship_version="${STARSHIP_VERSION:-}"
+starship_version -q
+if [[ -n "$expected_starship_version" ]]; then
+    if [[ "$STARSHIP_VERSION" != "$expected_starship_version" ]]; then
+        echo "FAIL: starship_version '$STARSHIP_VERSION' != embedded version '$expected_starship_version'"
+        zmodload -u starship_native 2>/dev/null || true
+        exit 1
+    fi
+    echo "PASS: version $STARSHIP_VERSION (matches embedded starship)"
+elif [[ "$STARSHIP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    echo "PASS: version $STARSHIP_VERSION"
+else
+    echo "FAIL: version '$STARSHIP_VERSION' is not a semver"
+    zmodload -u starship_native 2>/dev/null || true
+    exit 1
+fi
+
 # Render prompt
 starship_prompt 2>/dev/null
 

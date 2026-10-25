@@ -74,8 +74,8 @@ char *ssp_stats(ssp_stats_t *out);
  * therefore returns void rather than an error string. */
 void ssp_free(char *ptr);
 
-/* Return the library version string (static, no free needed). This accessor
- * cannot fail; it is not part of the error protocol. */
+/* Return the embedded upstream Starship version string (static, no free
+ * needed). This accessor cannot fail; it is not part of the error protocol. */
 const char *ssp_version(void);
 
 #ifdef __cplusplus

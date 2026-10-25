@@ -376,7 +376,15 @@ pub unsafe extern "C" fn ssp_free(ptr: *mut c_char) {
     }
 }
 
-/// Return the library version as a static string.
+/// Return the upstream Starship version this library embeds, as a static
+/// string.
+///
+/// This is the version of the `starship` crate it was built against (the
+/// `in-process` feature is version-locked to it), not `starship-ffi`'s own
+/// crate version: scripts ask "which Starship am I running?" and that is what
+/// matters. A `build.rs` derives it from the checkout (or from
+/// `STARSHIP_VERSION`, which CMake passes), and CMake pins the checkout to a
+/// commit (`STARSHIP_GIT_TAG`).
 ///
 /// The returned pointer is valid for the lifetime of the process and must NOT
 /// be freed. This accessor cannot fail, so it is exempt from the error
@@ -385,7 +393,7 @@ pub unsafe extern "C" fn ssp_free(ptr: *mut c_char) {
 pub extern "C" fn ssp_version() -> *const c_char {
     // A string literal has static storage duration and the trailing NUL is
     // included in the literal itself, so no LazyLock/allocation is needed.
-    static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
+    static VERSION: &str = concat!(env!("STARSHIP_VERSION"), "\0");
     VERSION.as_ptr().cast()
 }
 
@@ -621,13 +629,15 @@ mod tests {
         destroy_session();
     }
 
-    /// Test that version returns a non-null static string.
+    /// Test that version returns the embedded upstream Starship version.
     #[test]
     fn test_version() {
         let v = ssp_version();
         assert!(!v.is_null());
         let s = unsafe { CStr::from_ptr(v) }.to_str().unwrap();
-        assert!(!s.is_empty());
+        assert_eq!(s, env!("STARSHIP_VERSION"));
+        // A version, not a path or a commit.
+        assert_eq!(s.split('.').count(), 3, "unexpected version {s:?}");
     }
 
     /// Test that stats returns valid data.

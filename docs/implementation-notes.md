@@ -133,10 +133,11 @@ fork guard 也遵循同一约定，在子进程中直接 `return error_string(..
 | 可失败调用的返回值（错误串）   | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
 | `ssp_render` → `out` | Rust`CString::into_raw()` | 调用者必须`ssp_free()` |
 | 全局 session                    | 库内部`Mutex<Option<Session>>` | `ssp_shutdown()` |
-| `ssp_version` 返回值           | 静态字符串字面量            | 不可释放                 |
+| `ssp_version` 返回值           | 静态字符串（上游 Starship 版本） | 不可释放                 |
 
-`ssp_free()` 本身不可能失败，因此保持 `void` 返回；`ssp_version()` 返回静态字符串，
-两者不参与 `char *` 错误协议。
+`ssp_free()` 本身不可能失败，因此保持 `void` 返回；`ssp_version()` 返回嵌入的
+上游 Starship 版本（由 `build.rs`/`STARSHIP_VERSION` 注入），两者不参与
+`char *` 错误协议。
 
 错误获取方式就是读取函数返回值：
 
@@ -329,6 +330,25 @@ endif()
 Linux 使用 `--allow-shlib-undefined` 允许未定义 zsh 符号；
 macOS 使用 `-undefined dynamic_lookup` 达到同等效果。
 
+### 5.6 版本号、上游 pin 与依赖锁
+
+三者的关系：
+
+- **`STARSHIP_GIT_TAG`**（CMake cache）：`STARSHIP_SOURCE=AUTO` 时拉取的 Starship
+  commit（也可以是 branch/tag）。它钉住的是**上游源码**，rebase `in-process`
+  之后要手动 bump；本地 `STARSHIP_SOURCE=…` 的 HEAD 与它不一致时只 warning。
+- **`STARSHIP_VERSION`**（CMake cache，空则自动）：从
+  `${STARSHIP_SRC_DIR}/Cargo.toml` 的 `version = "x.y.z"` 解析。
+  `rust_src/build.rs` 通过环境变量拿到它（直接 `cargo build` 时则自己读
+  `../starship/Cargo.toml`），以 `cargo:rustc-env=STARSHIP_VERSION=…` 注入；
+  `ssp_version()` 返回的就是它。Cargo 的 `[package].version` 只能是字面量，
+  无法从依赖派生，所以 `starship-ffi` 自己的 crate 版本保持独立（当前 0.1.0），
+  语义是 wrapper 版本。
+- **`rust_src/Cargo.lock`**：bump 上游后必须刷新。刷新命令：
+  `cargo update --manifest-path rust_src/Cargo.toml`（或按需 `-p <crate>`）。
+  这个坑 debug 构建不一定暴露，因为 `in-process` 构建使用
+  `default-features = false`，与 upstream 默认 feature 集不同。
+
 ## 6. 测试策略
 
 ### 分层测试
@@ -347,6 +367,9 @@ macOS 使用 `-undefined dynamic_lookup` 达到同等效果。
 - zsh 测试需要 `zsh-5.9.2/Src/` 已运行过 `make -f Makemod` 生成头文件
 - pwsh 测试需要 `libstarship_ffi.so` 与 `StarshipNative.dll` 在同一目录
 - C 冒烟测试使用 `dlopen` 动态加载，不依赖链接器路径
+- CMake 的 `test-zsh` / `test-pwsh` 会传入 `STARSHIP_VERSION`，测试据此断言
+  `ssp_version()` 等于嵌入的上游 Starship 版本；直接运行测试脚本且未设置该变量时，
+  只校验版本号形如 `x.y.z`
 
 ## 7. 平台移植注意事项
 

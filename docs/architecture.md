@@ -107,7 +107,8 @@ char *ssp_shutdown(void);
 char *ssp_render(const ssp_render_input_t *in, char **out);
 char *ssp_stats(ssp_stats_t *out);
 
-// ssp_free 本身不会失败，保持 void；ssp_version 返回静态字符串，不参与错误协议
+// ssp_free 本身不会失败，保持 void；
+// ssp_version 返回嵌入的上游 Starship 版本（静态字符串），不参与错误协议
 void ssp_free(char *ptr);
 const char *ssp_version(void);
 ```
@@ -190,8 +191,13 @@ shell-integrated-starship/
 项目使用 CMake 构建，支持 Ninja Multi-Config、Visual Studio 等生成器。
 配置时自动处理依赖：
 
-1. **Starship 源码**：`STARSHIP_SOURCE=AUTO`（默认）从 GitHub clone `in-process` 分支
-2. **zsh 源码**：`ZSH_SOURCE=AUTO`（默认）下载 zsh 5.9.2 并自动 `./configure` + 生成头文件
+1. **Starship 源码**：`STARSHIP_SOURCE=AUTO`（默认）从 GitHub clone `in-process` 分支的
+   **固定 commit**（`STARSHIP_GIT_TAG`），保证构建可复现；rebase 后需要 bump pin。
+   本地源码路径不参与 pin 校验，HEAD 与 pin 不一致时只 warning。
+2. **Starship 版本**：从 `${STARSHIP_SRC_DIR}/Cargo.toml` 读取 `version = "x.y.z"`，
+   通过 `-DSTARSHIP_VERSION=` 可覆盖；`rust_src/build.rs` 将其注入 `ssp_version()`，
+   因此该函数返回嵌入的上游 Starship 版本，而不是 wrapper crate 的 0.1.0。
+3. **zsh 源码**：`ZSH_SOURCE=AUTO`（默认）下载 zsh 5.9.2 并自动 `./configure` + 生成头文件
 
 ```bash
 # 一键构建（自动下载依赖）
@@ -216,7 +222,9 @@ CMake 选项：
 
 | 选项                  | 默认值    | 说明                                                |
 | --------------------- | --------- | --------------------------------------------------- |
-| `STARSHIP_SOURCE`   | `AUTO`  | Starship 源码：`AUTO` 从 GitHub clone，或本地路径 |
+| `STARSHIP_SOURCE`   | `AUTO`  | Starship 源码：`AUTO` 从 GitHub 拉取 `STARSHIP_GIT_TAG`，或本地路径 |
+| `STARSHIP_GIT_TAG`  | `3116a1e7…`（当前 in-process tip） | `STARSHIP_SOURCE=AUTO` 时钉住的 Starship commit |
+| `STARSHIP_VERSION`  | 空（自动） | FFI 上报的 Starship 版本；空则从源码树的 `Cargo.toml` 派生 |
 | `ZSH_SOURCE`        | `AUTO`  | zsh 源码：`AUTO` 下载 zsh 5.9.2，或已配置的源码树 |
 | `ZSH_VERSION`       | `5.9.2` | 下载 zsh 的版本                                     |
 | `BUILD_ZSH_MODULE`  | `ON`    | 构建 zsh 可加载模块                                 |

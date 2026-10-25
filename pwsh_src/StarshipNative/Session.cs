@@ -130,7 +130,7 @@ public static class Session
     }
 
     /// <summary>
-    /// Get the library version string.
+    /// Get the embedded upstream Starship version string.
     /// </summary>
     public static string Version()
     {
