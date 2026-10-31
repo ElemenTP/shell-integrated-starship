@@ -81,7 +81,7 @@ sudo cmake --install build --config Release --prefix /usr/local
 | 选项                  | 默认值    | 说明                                                    |
 | --------------------- | --------- | ------------------------------------------------------- |
 | `STARSHIP_SOURCE`   | `AUTO`  | Starship 源码：`AUTO` 从 GitHub 拉取 `STARSHIP_GIT_TAG`，或本地路径 |
-| `STARSHIP_GIT_TAG`  | `3116a1e7…`（当前 in-process tip） | `STARSHIP_SOURCE=AUTO` 时钉住的 Starship commit；也可以写 branch/tag |
+| `STARSHIP_GIT_TAG_OVERRIDE` | 空 | 覆盖 `CMakeLists.txt` 里钉住的 Starship commit（`STARSHIP_SOURCE=AUTO` 时；也可以写 branch/tag）；不设置就用文件里的 pin |
 | `STARSHIP_VERSION`  | 空（自动） | FFI 上报的 Starship 版本；空则从源码树的 `Cargo.toml` 派生 |
 | `ZSH_SOURCE`        | `AUTO`  | zsh 源码：`AUTO` 下载 zsh 5.9.2，或已配置的源码树路径 |
 | `ZSH_VERSION`       | `5.9.2` | 下载 zsh 的版本（ZSH_SOURCE=AUTO 时）                   |

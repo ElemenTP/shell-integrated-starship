@@ -22,10 +22,16 @@ option(BUILD_TESTS        "Build test executables"                          ON)
 set(STARSHIP_SOURCE "AUTO" CACHE STRING
     "Starship source: 'AUTO' to clone from GitHub, or a local path")
 # The in-process feature is developed on a branch, so pin the commit (not the
-# moving branch) to keep AUTO builds reproducible. Bump this after rebasing the
-# branch; a local STARSHIP_SOURCE checkout that differs only gets a warning.
-set(STARSHIP_GIT_TAG "3116a1e70f4b503177bba1e99f992e05d4e93d91" CACHE STRING
-    "Starship commit/tag to fetch when STARSHIP_SOURCE=AUTO")
+# moving branch) to keep AUTO builds reproducible. This is a normal variable
+# (not a cache entry) so bumping it here also takes effect in an existing build
+# directory; use -DATUIN_GIT_TAG_OVERRIDE for a one-off pin. A local
+# STARSHIP_SOURCE checkout that differs only gets a warning.
+set(STARSHIP_GIT_TAG "3116a1e70f4b503177bba1e99f992e05d4e93d91")
+set(STARSHIP_GIT_TAG_OVERRIDE "" CACHE STRING
+    "Override STARSHIP_GIT_TAG (Starship commit/tag fetched when STARSHIP_SOURCE=AUTO)")
+if(STARSHIP_GIT_TAG_OVERRIDE)
+    set(STARSHIP_GIT_TAG "${STARSHIP_GIT_TAG_OVERRIDE}")
+endif()
 # The Starship version the FFI reports. Empty = derive it from the checkout.
 set(STARSHIP_VERSION "" CACHE STRING
     "Starship version embedded in the FFI (empty: derive from STARSHIP_SRC_DIR/Cargo.toml)")
@@ -109,7 +115,7 @@ if(EXISTS "${STARSHIP_SRC_DIR}/.git")
     if(_starship_git_rc EQUAL 0 AND NOT _starship_head STREQUAL STARSHIP_GIT_TAG)
         message(WARNING
             "Starship checkout ${_starship_head} differs from the pinned STARSHIP_GIT_TAG "
-            "${STARSHIP_GIT_TAG}; pass -DSTARSHIP_GIT_TAG to update the pin")
+            "${STARSHIP_GIT_TAG}; use -DSTARSHIP_GIT_TAG_OVERRIDE=<commit> for a one-off pin")
     endif()
 endif()
 
